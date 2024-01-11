@@ -126,7 +126,7 @@ BLA::Matrix<2,1>  B_h = {0.5 * 0.004 * 0.004, 0.004};
 BLA::Matrix<1,2>  C_h = {  1,  0   };
 BLA::Matrix<2,2>  U_h = {  0,  0,
                            0,  0  };
-float std_dev_acc = pow(0.50,2); // 0.10^2 m/s^2 deviazione standard acc
+float std_dev_acc = pow(0.1,2); // 0.10^2 m/s^2 deviazione standard acc
 BLA::Matrix<1,1> std_dev_baro = { pow(0.2 , 2) }; // 0.2 m incertezza sul barometro
 BLA::Matrix<2,1> K_h = {  0,  0   };
 BLA::Matrix<2,2> I = {  1,  0,
@@ -165,7 +165,7 @@ void setup() {
   delay(3000);
   Serial.println("RAZZETTO");
 
-  RemoteXY_Init();
+  //RemoteXY_Init();
 
   // PIN DA SETTARE
   // digitali
@@ -241,42 +241,56 @@ void setup() {
   base_altitude /= 100;
   // altitudine terra
   Serial << "altitudine terra: " << base_altitude << "\n";
-  delay(10000);
+  delay(1000);
 }
 
 // ========================= LOOP =========================
 
+float dt_media = 0;
+int x = 0;
 void loop() {
-  RemoteXY_Handler();
+  //RemoteXY_Handler();
+
   //leggo valori da IMU
 
   // battery percentage
-  RemoteXY.battery_percentage = calc_batt_percentage();
+  //RemoteXY.battery_percentage = calc_batt_percentage();
   // controllo che sia inserita la sd
-  RemoteXY.sd_check = sd_check();
+  //RemoteXY.sd_check = sd_check();
   // continuità sui pyro channel
-  pyro_continuity();
+  //pyro_continuity();
 
   readIMU();
-  // calcolo attitude con accelerometro e magnetometro
+  //calcolo attitude con accelerometro e magnetometro
   calc_attitude_acc();
+  
   RemoteXY.yaw = attitude_acc(0);
   RemoteXY.roll = attitude_acc(1);
   RemoteXY.pitch = attitude_acc(2);
-
+  
   readBaro();
-
+  
+  
   kalman_filter_attitude();
   kalman_filter_hight();
-  Serial << "g:9.8,"
-         << "g_neg:-9.8,"
-     //   << "acc_z_inertial:"     << acc_vert            << ","
-         << "vertical_velocity:"  << v_vert               << ","
-     //    << "altitude_baro:"      << altitude_baro        << ","
-         << "h_baro:"             << h_baro               << ","
-         << "h_kalman:"           << S_h(0,0)             << ","
-         << "v_kalman:"           << S_h(1,0)             << "\n";
-  //Serial << attitude_kalman << '\n';
+  
+  
+  Serial << "+y_lim:180,"
+         << "-y_lim:-180,"
+     //    << "acc_x:" << acc(0) << ","
+     //    << "acc_y:" << acc(1) << ","
+     //    << "acc_z:" << acc(2) << "\n"; 
+     //    << "acc_vert"     << acc_vert            << ","
+     //    << "vel_vert:"  << v_vert               << ","
+     //    << "h_baro:"             << h_baro               << ","
+     //    << "h_kalman:"           << S_h(0,0)             << ","
+     //    << "v_kalman:"           << S_h(1,0)             << "\n";
+          << "att_acc_x:"  << attitude_acc(0)     << ','
+          << "att_acc_y:"  << attitude_acc(1)     << ','
+          << "att_acc_z:"  << attitude_acc(2)     << ','
+          << "att_kalm_x:" << attitude_kalman(0)  << ','
+          << "att_kalm_y:" << attitude_kalman(1)  << ','
+          << "att_kalm_z:" << attitude_kalman(2)  << '\n';  
 }
 
 // ========================= FUNZIONI =========================
@@ -386,18 +400,25 @@ void readIMU() {
   // prendo un valore dall'imu
   while (!bno08x.getSensorEvent(&sensorValueIMU)) ;
   
+  float app;
   long int mill;
   switch (sensorValueIMU.sensorId) {
     case SH2_RAW_ACCELEROMETER:
-      acc(0) = -sensorValueIMU.un.rawAccelerometer.y / 65535. * 156.96;
-      acc(1) = sensorValueIMU.un.rawAccelerometer.x / 65535. * 156.96;
+      acc(0) = sensorValueIMU.un.rawAccelerometer.x / 65535. * 156.96;
+      acc(1) = sensorValueIMU.un.rawAccelerometer.y / 65535. * 156.96;
       acc(2) = sensorValueIMU.un.rawAccelerometer.z / 65535. * 156.96;
+      // calcolo il tempo di campionamento
       mill = millis();
       if (last_sample_acc != 0) {
         dt_acc = (mill - last_sample_acc) * 0.001;
       }
       last_sample_acc = mill;
+      // aggiusto la misura con la calibrazione
       cal_acc();
+      // porto gli assi a quelli disegnati sulla scheda uguali a quelli del giroscopio e magnetometro
+      app = acc(0);
+      acc(0) = -acc(1);
+      acc(1) = app;
       break;
     case SH2_MAGNETIC_FIELD_CALIBRATED:
       mag(0) = sensorValueIMU.un.magneticField.x;
@@ -434,10 +455,10 @@ void cal_acc() {
 
 void setReports(void) {
   Serial.println("setReports");
-  if (!bno08x.enableReport(SH2_RAW_ACCELEROMETER)) {
+  if (!bno08x.enableReport(SH2_RAW_ACCELEROMETER,300)) {
     Serial.println("Could not enable raw accelerometer");
   }
-  if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED)) {
+  if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED,300)) {
     Serial.println("Could not enable raw gyroscope");
   }
   if (!bno08x.enableReport(SH2_MAGNETIC_FIELD_CALIBRATED)) {

@@ -1,4 +1,6 @@
 #include <math.h>
+#include <string>
+#include <iostream>
 #include <stdlib.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -44,52 +46,67 @@ using namespace BLA;
 //        RemoteXY include library          //
 //////////////////////////////////////////////
 
-// RemoteXY select connection mode and include library
+// you can enable debug logging to Serial at 115200
+//#define REMOTEXY__DEBUGLOG  
+
+// RemoteXY select connection mode and include library 
 #define REMOTEXY_MODE__ESP32CORE_WIFI_POINT
 #include <WiFi.h>
 #include <RemoteXY.h>
 
-// RemoteXY connection settings
+// RemoteXY connection settings 
 #define REMOTEXY_WIFI_SSID "Razzetto"
-#define REMOTEXY_WIFI_PASSWORD ""
+#define REMOTEXY_WIFI_PASSWORD "nimbus2024"
 #define REMOTEXY_SERVER_PORT 6377
+#define REMOTEXY_ACCESS_PASSWORD "nimbus2024"
 
 
-// RemoteXY configurate
+// RemoteXY configurate  
 #pragma pack(push, 1)
-uint8_t RemoteXY_CONF[] =  // 276 bytes
-  { 255, 0, 0, 21, 0, 13, 1, 16, 31, 1, 70, 16, 6, 10, 7, 7, 1, 121, 0, 70,
-    16, 22, 10, 7, 7, 1, 121, 0, 129, 0, 3, 5, 13, 3, 8, 77, 73, 67, 82, 79,
-    45, 83, 68, 0, 129, 0, 21, 5, 9, 3, 8, 80, 89, 82, 79, 32, 49, 0, 129, 0,
-    35, 5, 9, 3, 8, 80, 89, 82, 79, 32, 49, 0, 129, 0, 48, 5, 9, 3, 8, 80,
-    89, 82, 79, 32, 49, 0, 70, 16, 36, 10, 7, 7, 1, 121, 0, 70, 16, 49, 10, 7,
-    7, 1, 121, 0, 66, 1, 6, 25, 7, 16, 2, 26, 129, 0, 3, 20, 13, 3, 8, 66,
-    65, 84, 84, 69, 82, 89, 0, 71, 56, 1, 46, 19, 19, 0, 2, 24, 255, 0, 0, 52,
-    195, 0, 0, 52, 67, 0, 0, 52, 66, 0, 0, 32, 65, 0, 0, 160, 64, 24, 0, 71,
-    56, 41, 46, 19, 19, 0, 2, 24, 255, 0, 0, 52, 195, 0, 0, 52, 67, 0, 0, 52,
-    66, 0, 0, 32, 65, 0, 0, 160, 64, 24, 0, 71, 56, 21, 46, 19, 19, 0, 2, 24,
-    255, 0, 0, 52, 195, 0, 0, 52, 67, 0, 0, 52, 66, 0, 0, 32, 65, 0, 0, 160,
-    64, 24, 0, 129, 0, 4, 43, 12, 3, 8, 66, 65, 84, 84, 69, 82, 89, 0, 129, 0,
-    24, 43, 12, 3, 8, 66, 65, 84, 84, 69, 82, 89, 0, 129, 0, 45, 43, 12, 3, 8,
-    66, 65, 84, 84, 69, 82, 89, 0, 68, 17, 3, 67, 57, 32, 8, 36 };
+uint8_t RemoteXY_CONF[] =   // 355 bytes
+  { 255,5,0,43,0,92,1,16,31,1,70,16,6,8,7,7,1,121,0,70,
+  16,22,8,7,7,1,121,0,129,0,3,3,13,3,8,77,73,67,82,79,
+  45,83,68,0,129,0,21,3,9,3,8,80,89,82,79,32,49,0,129,0,
+  35,3,9,3,8,80,89,82,79,32,50,0,129,0,48,3,9,3,8,80,
+  89,82,79,32,51,0,70,16,36,8,7,7,1,121,0,70,16,49,8,7,
+  7,1,121,0,66,129,5,22,15,4,2,26,129,0,10,18,13,3,8,66,
+  65,84,84,69,82,89,0,71,56,2,34,19,19,0,2,24,255,0,0,52,
+  195,0,0,52,67,0,0,52,66,0,0,32,65,0,0,160,64,24,0,71,
+  56,42,34,19,19,0,2,24,255,0,0,52,195,0,0,52,67,0,0,52,
+  66,0,0,32,65,0,0,160,64,24,0,71,56,22,34,19,19,0,2,24,
+  255,0,0,52,195,0,0,52,67,0,0,52,66,0,0,32,65,0,0,160,
+  64,24,0,129,0,7,30,8,3,8,80,73,84,67,72,0,129,0,28,30,
+  7,3,8,82,79,76,76,0,129,0,48,30,6,3,8,89,65,87,0,68,
+  17,6,54,53,30,8,36,67,4,21,22,10,5,2,31,11,7,44,37,22,
+  23,4,2,26,2,3,129,0,41,18,14,3,8,83,69,65,32,76,69,86,
+  69,76,0,129,0,45,90,8,3,31,83,84,65,82,84,0,10,48,46,86,
+  12,12,4,1,31,79,78,0,31,79,70,70,0,129,0,36,91,8,3,24,
+  83,84,65,82,84,0,67,4,7,89,20,5,2,26,11 };
 
-// this structure defines all the variables and events of your control interface
+
+// this structure defines all the variables and events of your control interface 
 struct {
 
-  // output variables
-  uint8_t sd_check;           // led state 0 .. 1
-  uint8_t pyro_1_continuity;  // led state 0 .. 1
-  uint8_t pyro_2_continuity;  // led state 0 .. 1
-  uint8_t pyro_3_continuity;  // led state 0 .. 1
-  int8_t battery_percentage;  // =0..100 level position
-  float pitch;                // from -180 to 180
-  float yaw;                  // from -180 to 180
-  float roll;                 // from -180 to 180
-  float height;
-  float sealevelpressure;
+    // input variables
+  float sea_level;
+  uint8_t start; // =1 if state is ON, else =0 
 
-  // other variable
-  uint8_t connect_flag;  // =1 if wire connected, else =0
+    // output variables
+  uint8_t sd_check; // led state 0 .. 1 
+  uint8_t pyro_1_continuity; // led state 0 .. 1 
+  uint8_t pyro_2_continuity; // led state 0 .. 1 
+  uint8_t pyro_3_continuity; // led state 0 .. 1 
+  int8_t battery_percentage; // =0..100 level position 
+  float pitch;  // from -180 to 180 
+  float yaw;  // from -180 to 180 
+  float roll;  // from -180 to 180 
+  float height;
+  char battery_percentage_string[11];  // string UTF8 end zero 
+  char Errore[11];  // string UTF8 end zero 
+
+
+    // other variable
+  uint8_t connect_flag;  // =1 if wire connected, else =0 
 
 } RemoteXY;
 #pragma pack(pop)
@@ -104,7 +121,7 @@ Adafruit_BNO08x bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValueIMU;
 
 // STATO
-uint8_t stato = 1;
+int stato = 1;
 
 // FILE NELLA FLASH
 File file_flash;
@@ -177,7 +194,11 @@ void setup() {
   adcAttachPin(PYRO_2);
   adcAttachPin(PYRO_3);
   adcAttachPin(PYRO_4);
-  analogSetAttenuation(ADC_0db);  // lettura voltaggi da 0.0V - 0.8V
+  analogSetPinAttenuation(PYRO_1, ADC_0db);
+  analogSetPinAttenuation(PYRO_2, ADC_0db);
+  analogSetPinAttenuation(PYRO_3, ADC_0db);
+  analogSetPinAttenuation(PYRO_4, ADC_0db);
+  analogSetPinAttenuation(VOLTAGE_PIN, ADC_11db); // lettura voltaggi da 0.0V - 0.8V
   Serial.println("ADC: OK");
 
   // FILESISTEM
@@ -247,13 +268,12 @@ void setup() {
 // ========================= LOOP =========================
 
 void loop() {
-  //leggo valori da IMU
-
+  /*
   // battery percentage
   RemoteXY.battery_percentage = calc_batt_percentage();
   // controllo che sia inserita la sd
   RemoteXY.sd_check = sd_check();
-
+  
   readIMU();
   // calcolo attitude con accelerometro e magnetometro
   calc_attitude_acc();
@@ -274,31 +294,43 @@ void loop() {
          << "h_kalman:"           << S_h(0,0)             << ","
          << "v_kalman:"           << S_h(1,0)             << "\n";
   //Serial << attitude_kalman << '\n';
-
+*/
 
   //STATI
-  switch{
-    case(stato==1):
+  Serial.println("Switch");
+  Serial.println(stato);
+  switch(stato){
+    case 1:
+    Serial.println("Case 1");
     //instaurazione connessione utente-razzo set_up
+    RemoteXY_Handler();
+    // battery percentage
+    RemoteXY.battery_percentage = calc_batt_percentage();
+    //RemoteXY.battery_percentage_string[11]= (char) calc_batt_percentage();
     //if connessione stabilita {stato=2;}
-    if(RemoteXY.connect_flag){
+    if(RemoteXY_isConnected()){
       stato=2;
-      //suono del buzz
-      tone(BUZZER_PIN, 4000, 1000);
     }
     break;
-    case(stato==2):
+    case 2:
+    Serial.println("Case 2");
     //Aggiornamento interfaccia utente 
     RemoteXY_Handler();
+    // battery percentage
+    RemoteXY.battery_percentage = calc_batt_percentage();
+    RemoteXY.battery_percentage_string[11]= to_string(calc_batt_percentage());
     //if passaggio pressione al livello del mare{stato=3;}
-    sealevelpressure=RemoteXY.sealevelpressure;
-    if(sealevelpressure!=0){
+    if(RemoteXY.sea_level){
       stato=3;
+      tone(BUZZER_PIN, 2000, 500);
     }
     break;
-    case(stato==3):
+    case 3:
     //Aggiornamento interfaccia utente 
     RemoteXY_Handler();
+    // battery percentage
+    RemoteXY.battery_percentage = calc_batt_percentage();
+    RemoteXY.battery_percentage_string[11]= to_string(calc_batt_percentage());
     //Inizializzazione del ground
     readBaro();
     base_altitude=h_baro;
@@ -306,8 +338,12 @@ void loop() {
     calc_attitude_acc();
     //aggiorna interfaccia con assetto 
     RemoteXY_Handler();
-    //if Feedback positivo dell'utente per partite{stato=4;}
-    break;
+    //Feedback positivo dell'utente per partite{stato=4;}
+    if(RemoteXY.start){
+      stato=4;
+      tone(BUZZER_PIN, 3000, 1000);
+    }
+    break; /*
     case(stato==4): //Controlli preparatori
     //Controllo livello batteria LIPO tramite voltometro
     if(calc_batt_percentage()>60){
@@ -366,8 +402,8 @@ void loop() {
     break;
     case(stato==7):
     //Accensione prima carica di espulsione
-    /*if(7.T>1){stato=8;
-    }else if(|a|=9.81 || h>10){stato=9;}*/
+    if(7.T>1){stato=8;
+    }else if(|a|=9.81 || h>10){stato=9;}
     break;
     case(stato==8):
     //Accensione seconda carica di espulsione
@@ -384,7 +420,7 @@ void loop() {
     break;
     case(stato==11):
     //si accende segnale acustico
-    break;
+    break;*/
   }
     
 }
@@ -431,7 +467,7 @@ void kalman_filter_hight() {
   // calcolo la velocità verticale
   v_vert = v_vert + acc_vert * dt_acc;
 
-  Serial << dt_acc << "\n";
+  //Serial << dt_acc << "\n";
 
   // aggiorno il tempo di campionamento nella matrice di transizione dello stato 
   A_h(0,1) = dt_acc;
@@ -473,7 +509,8 @@ bool sd_check() {
 int calc_batt_percentage() {
   double voltage = 0;
   for (int i = 0; i < 10; i++) {
-    voltage += analogRead(VOLTAGE_PIN) / 8191. * 0.8;
+    voltage += analogRead(VOLTAGE_PIN) / 8191. * 2.6;
+    Serial << voltage << "\n";
   }
   voltage /= 100;
   return (int)((voltage - MIN_VOLTAGE) / ((MAX_VOLTAGE - MIN_VOLTAGE) / 100));
@@ -483,7 +520,7 @@ void readBaro() {
   while (!bmp.performReading()) {
     Serial.println("Failed to perform reading :(");
   }
-  altitude_baro = bmp.readAltitude(sealevelpressure);
+  altitude_baro = bmp.readAltitude(RemoteXY.sea_level);
   h_baro = altitude_baro - base_altitude;
 }
 

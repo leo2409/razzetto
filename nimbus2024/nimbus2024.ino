@@ -129,7 +129,7 @@ BLA::Matrix<2,2>  U_h = {  0,  0,
 float std_dev_acc = pow(0.1,2); // 0.10^2 m/s^2 deviazione standard acc
 BLA::Matrix<1,1> std_dev_baro = { pow(0.2 , 2) }; // 0.2 m incertezza sul barometro
 BLA::Matrix<2,1> K_h = {  0,  0   };
-BLA::Matrix<2,2> I = {  1,  0,
+BLA::Matrix<2,2> I = {  1,  0,}
                         0,  1,  };
 BLA::Matrix<1,1> M = { 0 };
 // giroscopio
@@ -165,7 +165,7 @@ void setup() {
   delay(3000);
   Serial.println("RAZZETTO");
 
-  //RemoteXY_Init();
+  RemoteXY_Init();
 
   // PIN DA SETTARE
   // digitali
@@ -249,16 +249,16 @@ void setup() {
 float dt_media = 0;
 int x = 0;
 void loop() {
-  //RemoteXY_Handler();
+  RemoteXY_Handler();
 
   //leggo valori da IMU
 
   // battery percentage
-  //RemoteXY.battery_percentage = calc_batt_percentage();
+  RemoteXY.battery_percentage = calc_batt_percentage();
   // controllo che sia inserita la sd
-  //RemoteXY.sd_check = sd_check();
+  RemoteXY.sd_check = sd_check();
   // continuità sui pyro channel
-  //pyro_continuity();
+  pyro_continuity();
 
   readIMU();
   //calcolo attitude con accelerometro e magnetometro

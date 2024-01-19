@@ -19,6 +19,17 @@
 #define G_CONST (9.81)
 using namespace BLA;
 
+//colori led
+#define ledbianco (digitalWrite(RGB_BUILTIN, HIGH))  // Turn the RGB LED white
+#define ledspento (digitalWrite(RGB_BUILTIN, LOW))   // Turn the RGB LED off
+#define ledrosso  (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,0)) // Red
+#define ledverde  (neopixelWrite(RGB_BUILTIN,0,RGB_BRIGHTNESS,0)) // Green
+#define ledblue   (neopixelWrite(RGB_BUILTIN,0,0,RGB_BRIGHTNESS)) // Blue
+#define ledazzurro (neopixelWrite(RGB_BUILTIN,0,RGB_BRIGHTNESS,RGB_BRIGHTNESS)) // Azzurro
+#define ledviola   (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,RGB_BRIGHTNESS)) // Viola
+#define ledgiallo  (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,RGB_BRIGHTNESS,0)) // Giallo
+#define ledoffblack (neopixelWrite(RGB_BUILTIN,0,0,0)) // Off / black
+
 // definire pin per connessioni
 #define BUZZER_PIN 21
 #define VOLTAGE_PIN 1
@@ -41,6 +52,7 @@ using namespace BLA;
 #define MAX_VOLTAGE 0.7368  // Batteria 100% 4.2V -> 0.7368V
 #define MIN_VOLTAGE 0.6491  // batteria   0% 3.7V -> 0.6491V
 #define SEALEVELPRESSURE_HPA (1013.25)
+#define ACCTRASHOLD 20
 
 //////////////////////////////////////////////
 //        RemoteXY include library          //
@@ -159,12 +171,21 @@ BLA::Matrix<3> attitude_kalman = { 0, 90, 90 };
 BLA::Matrix<3> attitude_acc = { 0, 0, 0 };
 BLA::Matrix<3> uncertainty_attitude = { 5 * 5, 2 * 2, 2 * 2 };
 BLA::Matrix<3> kalman_gain = { 0, 0, 0, };
+float h_kalman;
+float v_kalman;
+
 
 long int last_sample_gyro = 0;
 float dt_gyro = 0;
 long int last_sample_acc = 0;
 float dt_acc = 0;
-// altezza e velocità verticale
+
+// variabili che indicano se nella corrente iterazione del loop sono arrivati dei campioni dei sensori indicati
+bool new_acc = false;
+bool new_gyro = false;
+bool new_mag = false;
+bool new_baro = false;
+unsigned long t_accensionemotore=0;
 
 
 // matrici calibrazione accelerometro
@@ -249,14 +270,6 @@ void setup() {
     }
   }
   // prendo 100 misurazioni e faccio la media
-  for (int i = 0; i < 100; i++) {
-    while (!bmp.performReading()) {
-      Serial.println("Failed to perform reading :(");
-    }
-    altitude_baro = bmp.readAltitude(SEALEVELPRESSURE_HPA);
-    base_altitude += altitude_baro;
-  }
-  base_altitude /= 100;
   // altitudine terra
   Serial << "altitudine terra: " << base_altitude << "\n";
   delay(10000);
@@ -289,10 +302,175 @@ int last_sample_bmp = 0;
 char stampa[100];
 
 // ========================= FUNZIONI =========================
+// stimo lo stato del razzo (orientazione, velocità verticale e altezza dal suolo) 
+void stima_stato_razzo() {
+  readIMU();
+  readBaro();
+  if (new_gyro) {
+    // predizione dell'orientazione
+    attitude_kalman = attitude_kalman + gyro * dt_gyro;
+    // aggiorno incertezza sulla predizione
+    uncertainty_attitude(0) = uncertainty_attitude(0) + pow(dt_gyro, 2) * 2 * 2;  // 4*4 è la deviazione standard del giroscopio
+    uncertainty_attitude(1) = uncertainty_attitude(1) + pow(dt_gyro, 2) * 2 * 2;
+    uncertainty_attitude(2) = uncertainty_attitude(2) + pow(dt_gyro, 2) * 2 * 2;
+  }
 
+  if (new_acc) {
+    calc_attitude_acc();
+    // calcolo kalman gain x
+    kalman_gain(0) = uncertainty_attitude(0) / (uncertainty_attitude(0) + 3 * 3);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
+    // update stima
+    attitude_kalman(0) = attitude_kalman(0) + kalman_gain(0) * (attitude_acc(0) - attitude_kalman(0));
+    // calcolo kalman gain y
+    kalman_gain(1) = uncertainty_attitude(1) / (uncertainty_attitude(1) + 3 * 3);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
+    // update stima
+    attitude_kalman(1) = attitude_kalman(1) + kalman_gain(1) * (attitude_acc(1) - attitude_kalman(1));
+    // calcolo kalman gain z
+    kalman_gain(2) = uncertainty_attitude(2) / (uncertainty_attitude(2) + 3 * 3);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
+    // update stima
+    attitude_kalman(2) = attitude_kalman(2) + kalman_gain(2) * (attitude_acc(2) - attitude_kalman(2));
+
+    // aggiorno incertezza sulla stima stima
+    uncertainty_attitude(0) = (1 - kalman_gain(0)) * uncertainty_attitude(0);
+    uncertainty_attitude(1) = (1 - kalman_gain(1)) * uncertainty_attitude(1);
+    uncertainty_attitude(2) = (1 - kalman_gain(2)) * uncertainty_attitude(2);
+
+    // calcolo acc vert
+    calc_acc_vert();
+    // calcolo la velocità verticale (integrazione eulero all'indietro)
+    v_vert = v_vert + acc_vert * dt_acc;
+    // aggiorno il tempo di campionamento nella matrice di transizione dello stato 
+    A_h(0,1) = dt_acc;
+    // aggiorno la matrice degli ingressi B
+    B_h(0) = 0.5 * pow(dt_acc,2);
+    B_h(1) = dt_acc;
+    // predizione sulla velocità e sull'altezza
+    S_h = A_h * S_h + B_h * acc_vert;
+    // aggiorno incertezza sulla predizione
+    U_h = A_h * U_h * ~A_h + (B_h * ~B_h) * std_dev_acc;
+    }
+    
+  if (new_baro) {
+    // faccio update sulla stima velocità verticale e altezza
+    // update incertezza
+    // calcolo il guadagno di kalman
+    K_h = U_h * ~C_h * Inverse(C_h * U_h * ~C_h + std_dev_baro);
+    // M è la misura sull'altezza
+    M = {h_baro};
+    // aggiorno la stima
+    S_h = S_h + K_h * (M - C_h * S_h);
+    // aggiorno l'incertezza sulla stima
+    U_h = (I - K_h * C_h) * U_h;
+  }
+  h_kalman=S_h(0,0);
+  v_kalman=S_h(1,0);
+}
+
+void calc_acc_vert() {
+  // calcolo l'accelerazione sull'asse z inerziale
+  acc_vert =  - sin(degToRad(attitude_kalman(1))) * acc(2)
+              + cos(degToRad(attitude_kalman(1))) * sin(degToRad(attitude_kalman(2))) * acc(1)
+              - cos(degToRad(attitude_kalman(1))) * cos(degToRad(attitude_kalman(2))) * acc(0);
+  
+  // tolgo la gravità
+  acc_vert = acc_vert - 9.81;
+}
+
+void readBaro() {
+  new_baro = false;
+  if (last_sample_bmp == 0 || millis() - last_sample_bmp > 10) {
+    altitude_baro = bmp.readAltitude(sealevelpressure);
+    n_campioni_baro++;
+    new_baro = true;
+    last_sample_bmp = millis();
+  }
+  h_baro = altitude_baro - base_altitude;
+}
+
+
+void setGroundAltitude(){
+  ledgiallo;
+  for (int i = 0; i < 1000; i++) {
+    readBaro();
+    base_altitude += altitude_baro;
+  }
+  base_altitude /= 1000;
+  ledspento;
+}
+
+void readIMU() {
+  new_acc = false;
+  new_gyro = false;
+  new_mag = false;
+
+  if (bno08x.wasReset()) {
+    Serial.println("bno085 è stato resettato");
+    setReports();
+  }
+  
+  // prendo un valore dall'imu
+  while (!bno08x.getSensorEvent(&sensorValueIMU)) ;
+  //Serial.print("while readImu: "); Serial.println(millis() - t2);
+  
+  long int mill;
+  switch (sensorValueIMU.sensorId) {
+    case SH2_RAW_ACCELEROMETER:
+      acc(0) = sensorValueIMU.un.rawAccelerometer.y / 65535. * 156.96;
+      acc(1) = -sensorValueIMU.un.rawAccelerometer.x / 65535. * 156.96;
+      acc(2) = -sensorValueIMU.un.rawAccelerometer.z / 65535. * 156.96;
+      
+      mill = millis();
+      if (last_sample_acc != 0) {
+        dt_acc = (mill - last_sample_acc) * 0.001;
+      }
+      last_sample_acc = mill;
+      cal_acc();
+      
+      n_campioni_acc++;
+      new_acc = true;
+      break;
+    case SH2_MAGNETIC_FIELD_CALIBRATED:
+      mag(0) = sensorValueIMU.un.magneticField.x;
+      mag(1) = sensorValueIMU.un.magneticField.y;
+      mag(2) = sensorValueIMU.un.magneticField.z;
+      n_campioni_magn++;
+      new_mag = true;
+      break;
+    case SH2_GYROSCOPE_CALIBRATED:  // rad/s
+      gyro(0) = degrees(sensorValueIMU.un.gyroscope.x);
+      gyro(1) = degrees(sensorValueIMU.un.gyroscope.y);
+      gyro(2) = degrees(sensorValueIMU.un.gyroscope.z);
+      
+      mill = millis();
+      if (last_sample_gyro != 0) {
+        dt_gyro = (mill - last_sample_gyro) * 0.001;
+      }
+      last_sample_gyro = mill;
+      
+      n_campioni_gyro++;
+      new_gyro = true;
+      break;
+  }
+}
+
+// calibrazione accelerometro c'=u'*A'+b' se traspongo c = A*u + b con u e c e b con dim [3]x[1]
+// u (uncal) = c (cal) = a (acc) -> acc = A * acc + b
+void cal_acc() {
+  acc = A_cal_acc * acc + b_cal_acc;
+}
+
+void calc_attitude_acc() {
+  attitude_acc(1) = atan2(-acc(2), sqrt(pow(acc(1), 2) + pow(acc(0), 2)));
+  attitude_acc(2) = atan2(acc(1), -acc(0));
+  attitude_acc(0) = atan2(mag(0) * sin(attitude_acc(1)) - mag(1) * cos(attitude_acc(1)), mag(2) * cos(attitude_acc(2)) + sin(attitude_acc(2)) * (mag(1) * sin(attitude_acc(1)) + mag(0) * cos(attitude_acc(1))));
+  attitude_acc(0) = degrees(attitude_acc(0));
+  attitude_acc(1) = degrees(attitude_acc(1));
+  attitude_acc(2) = degrees(attitude_acc(2));
+}
 
 // ======== kalman ==========
 
+/*
 void kalman_filter_attitude() {
   // prediction
   attitude_kalman = attitude_kalman + gyro * dt_gyro;
@@ -303,7 +481,7 @@ void kalman_filter_attitude() {
   uncertainty_attitude(2) = uncertainty_attitude(2) + pow(dt_gyro, 2) * 2 * 2;
 
   // calcolo kalman gain
-  kalman_gain(0) = uncertainty_attitude(0) / (uncertainty_attitude(0) + 5 * 5);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
+  kalman_gain(0) = uncertainty_attitude(0) / (uncertainty_attitude(0) + 3 * 3);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
   // new attitude
   attitude_kalman(0) = attitude_kalman(0) + kalman_gain(0) * (attitude_acc(0) - attitude_kalman(0));
   // calcolo kalman gain
@@ -353,10 +531,11 @@ void kalman_filter_hight() {
   U_h = (I - K_h * C_h) * U_h;
 
 }
+*/
 
 // ============= funzioni utili negli stati ============
 
-void aggiornamento(){
+void updateUI(){
   RemoteXY_Handler();
   // battery percentage
   calc_batt_percentage();
@@ -365,6 +544,9 @@ void aggiornamento(){
   pyro_continuity();
   //controllo sd_check;
   sd_check();
+  RemoteXY.roll=attitude_kalman(0);
+  RemoteXY.pitch=attitude_kalman(1);
+  RemoteXY.yaw=attitude_kalman(2);
 }
 
 float mod(BLA::Matrix<3> a){
@@ -399,96 +581,23 @@ void calc_batt_percentage() {
   RemoteXY.battery_percentage=(int)((voltage - MIN_VOLTAGE) / ((MAX_VOLTAGE - MIN_VOLTAGE) / 100));
 }
 
-void readBaro() {
-  if (last_sample_bmp == 0 || millis() - last_sample_bmp > 10) {
-    altitude_baro = bmp.readAltitude(SEALEVELPRESSURE_HPA);
-    n_campioni_baro++;
-    last_sample_bmp = millis();
-  }
-  h_baro = altitude_baro - base_altitude;
-}
-
-void readIMU() {
-  if (bno08x.wasReset()) {
-    Serial.println("bno085 è stato resettato");
-    setReports();
-  }
-  
-  // prendo un valore dall'imu
-  while (!bno08x.getSensorEvent(&sensorValueIMU)) ;
-  //Serial.print("while readImu: "); Serial.println(millis() - t2);
-  
-  long int mill;
-  switch (sensorValueIMU.sensorId) {
-    case SH2_RAW_ACCELEROMETER:
-      acc(0) = -sensorValueIMU.un.rawAccelerometer.y / 65535. * 156.96;
-      acc(1) = sensorValueIMU.un.rawAccelerometer.x / 65535. * 156.96;
-      acc(2) = sensorValueIMU.un.rawAccelerometer.z / 65535. * 156.96;
-      
-      mill = millis();
-      if (last_sample_acc != 0) {
-        dt_acc = (mill - last_sample_acc) * 0.001;
-      }
-      last_sample_acc = mill;
-      cal_acc();
-      
-      n_campioni_acc++;
-      break;
-    case SH2_MAGNETIC_FIELD_CALIBRATED:
-      mag(0) = sensorValueIMU.un.magneticField.x;
-      mag(1) = sensorValueIMU.un.magneticField.y;
-      mag(2) = sensorValueIMU.un.magneticField.z;
-      n_campioni_magn++;
-      break;
-    case SH2_GYROSCOPE_CALIBRATED:  // rad/s
-      gyro(0) = degrees(sensorValueIMU.un.gyroscope.x);
-      gyro(1) = degrees(sensorValueIMU.un.gyroscope.y);
-      gyro(2) = degrees(sensorValueIMU.un.gyroscope.z);
-      
-      mill = millis();
-      if (last_sample_gyro != 0) {
-        dt_gyro = (mill - last_sample_gyro) * 0.001;
-      }
-      last_sample_gyro = mill;
-      
-      n_campioni_gyro++;
-      break;
-  }
-}
-
-
-void calc_attitude_acc() {
-  attitude_acc(1) = atan2(-acc(2), sqrt(pow(acc(1), 2) + pow(acc(0), 2)));
-  attitude_acc(2) = atan2(acc(1), -acc(0));
-  attitude_acc(0) = atan2(mag(0) * sin(attitude_acc(1)) - mag(1) * cos(attitude_acc(1)), mag(2) * cos(attitude_acc(2)) + sin(attitude_acc(2)) * (mag(1) * sin(attitude_acc(1)) + mag(0) * cos(attitude_acc(1))));
-  attitude_acc(0) = degrees(attitude_acc(0));
-  attitude_acc(1) = degrees(attitude_acc(1));
-  attitude_acc(2) = degrees(attitude_acc(2));
-}
-
-// calibrazione accelerometro c'=u'*A'+b' se traspongo c = A*u + b con u e c e b con dim [3]x[1]
-// u (uncal) = c (cal) = a (acc) -> acc = A * acc + b
-void cal_acc() {
-  acc = A_cal_acc * acc + b_cal_acc;
-}
-
 
 // ============ LOOP ============
 
 void loop() {
   if (inizio == 0) inizio = millis();
-  else if (millis() - inizio > 30000){
-    /*
+  else if (millis() - inizio > 100000){
+    
     Serial.print("numero di campioni acc: "); Serial.println(n_campioni_acc);
-    Serial.print("hz acc: "); Serial.println(n_campioni_acc/30);
+    Serial.print("hz acc: "); Serial.println(n_campioni_acc/100);
     Serial.print("numero di campioni gyro: "); Serial.println(n_campioni_gyro);
-    Serial.print("hz gyro: "); Serial.println(n_campioni_gyro/30);
+    Serial.print("hz gyro: "); Serial.println(n_campioni_gyro/100);
     Serial.print("numero di campioni magn: "); Serial.println(n_campioni_magn);
-    Serial.print("hz magn: "); Serial.println(n_campioni_magn/30);
+    Serial.print("hz magn: "); Serial.println(n_campioni_magn/100);
     Serial.print("numero di campioni baro: "); Serial.println(n_campioni_baro);
-    Serial.print("hz baro: "); Serial.println(n_campioni_baro/30);
+    Serial.print("hz baro: "); Serial.println(n_campioni_baro/100);
     delay(10000);
-    */
+    
     inizio = millis();
     n_campioni_acc = 0;
     n_campioni_gyro = 0;
@@ -496,137 +605,133 @@ void loop() {
     n_campioni_baro = 0;
     last_sample_bmp = 0;
   }
-
-  readIMU();
-
-  readBaro();
-  // calcolo attitude con accelerometro e magnetometro
-  calc_attitude_acc();
+  stima_stato_razzo();
   RemoteXY.yaw = attitude_acc(0);
   RemoteXY.roll = attitude_acc(1);
   RemoteXY.pitch = attitude_acc(2);
 
-  kalman_filter_attitude();
-  kalman_filter_hight();
-
-  Serial << "g:9.8,"
-         << "g_neg:-9.8,"
-         << "acc_x:" << acc(0) << ","
-         << "acc_y:" << acc(1) << ","
-         << "acc_z:" << acc(2) << "\n";
-     //    << "att_x_acc:" << attitude_acc(0) << ","
-     //    << "att_y_acc:" << attitude_acc(1) << ","
-     //    << "att_z_acc:" << attitude_acc(2) << ","
+  Serial << "g:180"
+         << "g_neg:-180,"
+     //    << "acc_x:" << acc(0) << ","
+     //    << "acc_y:" << acc(1) << ","
+     //    << "acc_z:" << acc(2) << ","
+           << "gyro_x:" << gyro(0) << ","
+           << "gyro_y:" << gyro(1) << ","
+           << "gyro_z:" << gyro(2) << ","
+           << "att_x_acc:" << attitude_acc(0) << ","
+           << "att_y_acc:" << attitude_acc(1) << ","
+           << "att_z_acc:" << attitude_acc(2) << ","
      //    << "att_x_kalman:" << attitude_kalman(0) << ","
      //    << "att_y_kalman:" << attitude_kalman(1) << ","
      //    << "att_z_kalman:" << attitude_kalman(2) << "\n";
-     //   << "acc_z_inertial:"     << acc_vert            << ","
+     //   << "acc_vert:"     << acc_vert            << "\n";
      //    << "vertical_velocity:"  << v_vert               << ","
      //    << "altitude_baro:"      << altitude_baro        << ","
      //    << "h_baro:"             << h_baro               << ","
-     //    << "h_kalman:"           << S_h(0,0)             << ","
-     //    << "v_kalman:"           << S_h(1,0)             << "\n"; 
+            << "h_kalman:"           << S_h(0,0)             << ","
+            << "v_kalman:"           << S_h(1,0)             << "\n"; 
   //Serial << attitude_kalman << '\n';*/
-
-
+    
   //STATI
   Serial.println("Switch");
   Serial.println(stato);
   switch(stato){
-    case 1:
+    case 1:{
     Serial.println("Case 1");
     //instaurazione connessione utente-razzo set_up
     //Aggiornamento interfaccia
-    aggiornamento();
+    updateUI();
     //if connessione stabilita {stato=2;}
     if(RemoteXY_isConnected()){
       stato=2;
     }
-    break;
-    case 2:
+    }break;
+    case 2:{
     Serial.println("Case 2");
     //Aggiornamento interfaccia utente 
-    aggiornamento();
+    updateUI();
     //if passaggio pressione al livello del mare{stato=3;}
     if(RemoteXY.sea_level){
       stato=3;
       tone(BUZZER_PIN, 2000, 500);
     }
-    break;
-    case 3:
-    //Aggiornamento interfaccia utente 
-    aggiornamento();
-    //Inizializzazione del ground
-    readBaro();
-    base_altitude=h_baro;
+    }break;
+    case 3:{
     //Inizio Calcolo Assetto e altezza da terra, azione che continua per tutta la durata del volo
-    calc_attitude_acc();
-    //aggiorna interfaccia con assetto 
-    RemoteXY_Handler();
+    stima_stato_razzo();
+    //Aggiornamento interfaccia utente 
+    updateUI();
+    //Inizializzazione del ground
+    // TODO: FARE UNA MEDIA
+    sealevelpressure= RemoteXY.sea_level;
+    setGroundAltitude();
     //Feedback positivo dell'utente per partite{stato=4;}
     if(RemoteXY.start){
       stato=4;
       tone(BUZZER_PIN, 3000, 1000);
     }
-    break; 
-    case 4: //Controlli preparatori
+    }break; 
+    case 4:{ //Controlli preparatori
     //Aggiornamento interfaccia utente 
-    aggiornamento();
-
-    int controllo=1;
+    updateUI();
+    //string s="";
+    bool controllo=true;
     //Controllo livello batteria LIPO tramite voltometro
     if(RemoteXY.battery_percentage<=30){
       //Errore batteria scarica
-      strcat("KO Batteria ", RemoteXY.errore);
-      controllo=0;
+      //strcat("KO Batteria ", s);
+      controllo=false;
     }
     //Controllo SD
     if(!RemoteXY.sd_check){
       //Errore SD non inserita
-      strcat("NO SD ", RemoteXY.errore);
-      controllo=0;
+      //strcat("NO SD ", s);
+      controllo=false;
     }
     //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
-    float mod_attitude_acc=mod(attitude_acc);
-    if(mod_attitude_acc<=9.6 || mod_attitude_acc>=10.1){
+    stima_stato_razzo();
+    if(v_kalman<=-0.2 || v_kalman>=0.2){
       //ERRORE corpo non totalmente fermo
-      strcat("NO fermo ", RemoteXY.errore);
-      controllo=0;
+      //strcat("NO fermo ", s);
+      controllo=false;
     }
     //Controllo angoli Roll e Pitch con valore 0 , accelerometro e giroscopio
     if(RemoteXY.yaw==0 && RemoteXY.pitch==0){
       //ERRORE Roll e/o Pitch non sono a zero
-      strcat("NO Posizione ", RemoteXY.errore);
-      controllo=0;
-      }
+      //strcat("NO Posizione ", s);
+      controllo=false;
+    }
     //Controllo della continuità sulle micce 
     if(RemoteXY.pyro_1_continuity==0 || RemoteXY.pyro_2_continuity==0 || RemoteXY.pyro_4_continuity==0){            
       //ERRORE Non continuità delle micce
-      strcat("NO continuità", RemoteXY.errore);
-      controllo=0;
+      //strcat("NO continuità", s);
+      controllo=false;
     }
+    //strcpy(RemoteXY.errore, s);
     if(controllo){
       stato=5;
     } 
-    break; /*
-    case 5:
-    //Calcolo Assetto e altezza da terra
-    calc_attitude_acc();
-
+    }break;
+    case 5:{
+    //stima razzo
+    stima_stato_razzo();
     //Interfaccia utente R
+    updateUI();
+    WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
     //accensione motore
-    t0=millis();//quando acceso motore
+    t_accensionemotore=millis();//quando acceso motore
     //raccolta dati(S)
     
-    //accensione corretta
-    if(acc(0)>10){
+    //accensione corretta FA DEI TEST
+    if(acc(0)>=ACCTRASHOLD){
       stato=6;
-      
-    }else if(millis()-t0>3000){
+    }else if(millis()-t_accensionemotore>3000){
       stato=11;
     }
-    break;
+    }break; /*
     case 6:
+  
     //Controllo pressione tramite il barometro (convertito in un’altezza approssimativa)
     //Controllo accensione motore (registrazione del t in cui si spegne)
     //Controllo angoli Roll e Pitch imponendo dei valori massimi di oscillazione (y e z) con Logg
@@ -658,7 +763,6 @@ void loop() {
     case 11:
     //si accende segnale acustico
     break;
-    */
+   */ 
   }
-    
 }

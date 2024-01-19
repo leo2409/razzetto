@@ -95,14 +95,14 @@ struct {
   uint8_t sd_check; // led state 0 .. 1 
   uint8_t pyro_1_continuity; // led state 0 .. 1 
   uint8_t pyro_2_continuity; // led state 0 .. 1 
-  uint8_t pyro_3_continuity; // led state 0 .. 1 
+  uint8_t pyro_4_continuity; // led state 0 .. 1 
   int8_t battery_percentage; // =0..100 level position 
   float pitch;  // from -180 to 180 
   float yaw;  // from -180 to 180 
   float roll;  // from -180 to 180 
   float height;
   char battery_percentage_string[11];  // string UTF8 end zero 
-  char errore[11];  // string UTF8 end zero 
+  char errore[30];  // string UTF8 end zero 
 
 
     // other variable
@@ -265,8 +265,6 @@ void setup() {
 
 
 
-// ========================= LOOP =========================
-
 void setReports(void) {
   RemoteXY.battery_percentage = 0;
   Serial.println("setReports");
@@ -290,199 +288,10 @@ int n_campioni_baro = 0;
 int last_sample_bmp = 0;
 char stampa[100];
 
-void loop() {
-  if (inizio == 0) inizio = millis();
-  else if (millis() - inizio > 30000){
-    /*
-    Serial.print("numero di campioni acc: "); Serial.println(n_campioni_acc);
-    Serial.print("hz acc: "); Serial.println(n_campioni_acc/30);
-    Serial.print("numero di campioni gyro: "); Serial.println(n_campioni_gyro);
-    Serial.print("hz gyro: "); Serial.println(n_campioni_gyro/30);
-    Serial.print("numero di campioni magn: "); Serial.println(n_campioni_magn);
-    Serial.print("hz magn: "); Serial.println(n_campioni_magn/30);
-    Serial.print("numero di campioni baro: "); Serial.println(n_campioni_baro);
-    Serial.print("hz baro: "); Serial.println(n_campioni_baro/30);
-    delay(10000);
-    */
-    inizio = millis();
-    n_campioni_acc = 0;
-    n_campioni_gyro = 0;
-    n_campioni_magn = 0;
-    n_campioni_baro = 0;
-    last_sample_bmp = 0;
-  }
-
-  readIMU();
-
-  readBaro();
-  // calcolo attitude con accelerometro e magnetometro
-  calc_attitude_acc();
-  RemoteXY.yaw = attitude_acc(0);
-  RemoteXY.roll = attitude_acc(1);
-  RemoteXY.pitch = attitude_acc(2);
-
-  kalman_filter_attitude();
-  kalman_filter_hight();
-
-  Serial << "g:9.8,"
-         << "g_neg:-9.8,"
-         << "acc_x:" << acc(0) << ","
-         << "acc_y:" << acc(1) << ","
-         << "acc_z:" << acc(2) << "\n";
-     //    << "att_x_acc:" << attitude_acc(0) << ","
-     //    << "att_y_acc:" << attitude_acc(1) << ","
-     //    << "att_z_acc:" << attitude_acc(2) << ","
-     //    << "att_x_kalman:" << attitude_kalman(0) << ","
-     //    << "att_y_kalman:" << attitude_kalman(1) << ","
-     //    << "att_z_kalman:" << attitude_kalman(2) << "\n";
-     //   << "acc_z_inertial:"     << acc_vert            << ","
-     //    << "vertical_velocity:"  << v_vert               << ","
-     //    << "altitude_baro:"      << altitude_baro        << ","
-     //    << "h_baro:"             << h_baro               << ","
-     //    << "h_kalman:"           << S_h(0,0)             << ","
-     //    << "v_kalman:"           << S_h(1,0)             << "\n"; 
-  //Serial << attitude_kalman << '\n';*/
-
-
-  //STATI
-  /*
-  Serial.println("Switch");
-  Serial.println(stato);
-  switch(stato){
-    case 1:
-    Serial.println("Case 1");
-    //instaurazione connessione utente-razzo set_up
-    RemoteXY_Handler();
-    // battery percentage
-    RemoteXY.battery_percentage = calc_batt_percentage();
-    sprintf(RemoteXY.battery_percentage_string,"%d", RemoteXY.battery_percentage);
-    //if connessione stabilita {stato=2;}
-    if(RemoteXY_isConnected()){
-      stato=2;
-    }
-    break;
-    case 2:
-    Serial.println("Case 2");
-    //Aggiornamento interfaccia utente 
-    RemoteXY_Handler();
-    // battery percentage
-    RemoteXY.battery_percentage = calc_batt_percentage();
-    sprintf(RemoteXY.battery_percentage_string,"%d %%", RemoteXY.battery_percentage);
-    //if passaggio pressione al livello del mare{stato=3;}
-    if(RemoteXY.sea_level){
-      stato=3;
-      tone(BUZZER_PIN, 2000, 500);
-    }
-    break;
-    case 3:
-    //Aggiornamento interfaccia utente 
-    RemoteXY_Handler();
-    // battery percentage
-    RemoteXY.battery_percentage = calc_batt_percentage();
-    sprintf(RemoteXY.battery_percentage_string,"%d", RemoteXY.battery_percentage);
-    //Inizializzazione del ground
-    readBaro();
-    base_altitude=h_baro;
-    //Inizio Calcolo Assetto e altezza da terra, azione che continua per tutta la durata del volo
-    calc_attitude_acc();
-    //aggiorna interfaccia con assetto 
-    RemoteXY_Handler();
-    //Feedback positivo dell'utente per partite{stato=4;}
-    if(RemoteXY.start){
-      stato=4;
-      tone(BUZZER_PIN, 3000, 1000);
-    }
-    break; 
-    case 4: //Controlli preparatori
-    //Controllo livello batteria LIPO tramite voltometro
-    if(calc_batt_percentage()>60){
-      //Controllo SD
-      RemoteXY.sd_check = sd_check();
-      if(sd_check()){
-        //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
-        if(acc(0)<=0.2 && acc(2)<=0.2 && acc(1)>=0 && acc(1)<=10)){
-          //Controllo angoli Roll e Pitch con valore 0 , accelerometro e giroscopio
-          if(RemoteXY.yaw==0 && RemoXY.pitch==0){
-            //Controllo della continuità sulle micce 
-            if(pyro_continuity()){
-              stato=5;
-            }else{
-              //ERRORE Non continuità delle micce
-              sprintf(RemoteXY.errore,"%s", "Non continuità delle micce");
-            }
-          }else{
-            //ERRORE Roll e/o Pitch non sono a zero
-            sprintf(RemoteXY.errore,"%s", "Roll e/o Pitch non sono a zero");
-          }
-        }else{
-          //ERRORE corpo non totalmente fermo
-          sprintf(RemoteXY.errore,"%s", "Corpo non totalmente fermo");
-          
-        }
-      }else{
-        //Errore SD non inserita
-        sprintf(RemoteXY.errore,"%s", "SD non inserita");
-      }
-    }else{
-      //Errore batteria scarica
-      printf(RemoteXY.errore,"%s", "Batteria scarica");
-    }
-    break; 
-    case(stato==5):
-    //Calcolo Assetto e altezza da terra
-    calc_attitude_acc();
-
-    //Interfaccia utente R
-    //accensione motore
-    t0=millis();//quando acceso motore
-    //raccolta dati(S)
-    
-    //accensione corretta
-    if(acc(0)>10){
-      stato=6;
-      
-    }else if(millis()-t0>3000){
-      stato=11;
-    }
-    break;
-    case(stato==6):
-    //Controllo pressione tramite il barometro (convertito in un’altezza approssimativa)
-    //Controllo accensione motore (registrazione del t in cui si spegne)
-    //Controllo angoli Roll e Pitch imponendo dei valori massimi di oscillazione (y e z) con Logg
-    //unione delle misure con un algoritmo di sensor fusion
-    kalman_filter_hight();
-    //condizione: if( (h(t-1)-h(t)<0 && deltaT>100) || 6.T>t){stato=7;}
-    if(h0-h1<0 && deltaT>100){
-      stato=7;
-    }
-    break;
-    case(stato==7):
-    //Accensione prima carica di espulsione
-    if(7.T>1){stato=8;
-    }else if(|a|=9.81 || h>10){stato=9;}
-    break;
-    case(stato==8):
-    //Accensione seconda carica di espulsione
-    // if(|a|=9.81 || h>10){stato=9;}
-    break;
-    case(stato==9):
-    //Logging apertura paracadute 
-    //if(|a|=9.81 && h<2.5){stato=10;}
-    break;
-    case(stato==10):
-    //Raccolta dati(R)
-    //trasferimento di dati su flash su SD
-    //segnale acustico
-    break;
-    case(stato==11):
-    //si accende segnale acustico
-    break;
-  }
-  */
-    
-}
-
 // ========================= FUNZIONI =========================
+
+
+// ======== kalman ==========
 
 void kalman_filter_attitude() {
   // prediction
@@ -545,35 +354,51 @@ void kalman_filter_hight() {
 
 }
 
-/*
+// ============= funzioni utili negli stati ============
+
+void aggiornamento(){
+  RemoteXY_Handler();
+  // battery percentage
+  calc_batt_percentage();
+  sprintf(RemoteXY.battery_percentage_string,"%d", RemoteXY.battery_percentage);
+  //continuità micce
+  pyro_continuity();
+  //controllo sd_check;
+  sd_check();
+}
+
+float mod(BLA::Matrix<3> a){
+  float a0=pow(a(0),2);
+  float a1=pow(a(1),2);
+  float a2=pow(a(2),2);
+  return sqrt(a0+a1+a2);
+}
 
 void pyro_continuity() {
-  float pyro_1, pyro_2, pyro_3;  //, pyro_4;
+  float pyro_1, pyro_2, pyro_4;  //, pyro_4;
   pyro_1 = analogRead(PYRO_1) / 8191. * 0.8;
   pyro_2 = analogRead(PYRO_2) / 8191. * 0.8;
-  pyro_3 = analogRead(PYRO_3) / 8191. * 0.8;
-  //pyro_4 = analogRead(PYRO_4) / 8191. * 0.8;
+  pyro_4 = analogRead(PYRO_4) / 8191. * 0.8;
   RemoteXY.pyro_1_continuity = pyro_1 > 0.04;
   RemoteXY.pyro_2_continuity = pyro_2 > 0.04;
-  RemoteXY.pyro_3_continuity = pyro_3 > 0.04;
-  //RemoteXY.pyro_4_continuity = pyro_4 > 0.04;
+  RemoteXY.pyro_4_continuity = pyro_4 > 0.04;
 }
 
 // controllo che la sd sia inserita
-bool sd_check() {
-  return digitalRead(DET_SD) == HIGH;
+void sd_check() {
+  RemoteXY.sd_check=digitalRead(DET_SD) == HIGH;
 }
 
 // lettura percentuale batteria
-int calc_batt_percentage() {
+void calc_batt_percentage() {
   double voltage = 0;
   for (int i = 0; i < 10; i++) {
     voltage += analogRead(VOLTAGE_PIN) / 8191. * 0.8;
   }
   voltage /= 10;
-  return (int)((voltage - MIN_VOLTAGE) / ((MAX_VOLTAGE - MIN_VOLTAGE) / 100));
+  RemoteXY.battery_percentage=(int)((voltage - MIN_VOLTAGE) / ((MAX_VOLTAGE - MIN_VOLTAGE) / 100));
 }
-*/
+
 void readBaro() {
   if (last_sample_bmp == 0 || millis() - last_sample_bmp > 10) {
     altitude_baro = bmp.readAltitude(SEALEVELPRESSURE_HPA);
@@ -645,4 +470,195 @@ void calc_attitude_acc() {
 // u (uncal) = c (cal) = a (acc) -> acc = A * acc + b
 void cal_acc() {
   acc = A_cal_acc * acc + b_cal_acc;
+}
+
+
+// ============ LOOP ============
+
+void loop() {
+  if (inizio == 0) inizio = millis();
+  else if (millis() - inizio > 30000){
+    /*
+    Serial.print("numero di campioni acc: "); Serial.println(n_campioni_acc);
+    Serial.print("hz acc: "); Serial.println(n_campioni_acc/30);
+    Serial.print("numero di campioni gyro: "); Serial.println(n_campioni_gyro);
+    Serial.print("hz gyro: "); Serial.println(n_campioni_gyro/30);
+    Serial.print("numero di campioni magn: "); Serial.println(n_campioni_magn);
+    Serial.print("hz magn: "); Serial.println(n_campioni_magn/30);
+    Serial.print("numero di campioni baro: "); Serial.println(n_campioni_baro);
+    Serial.print("hz baro: "); Serial.println(n_campioni_baro/30);
+    delay(10000);
+    */
+    inizio = millis();
+    n_campioni_acc = 0;
+    n_campioni_gyro = 0;
+    n_campioni_magn = 0;
+    n_campioni_baro = 0;
+    last_sample_bmp = 0;
+  }
+
+  readIMU();
+
+  readBaro();
+  // calcolo attitude con accelerometro e magnetometro
+  calc_attitude_acc();
+  RemoteXY.yaw = attitude_acc(0);
+  RemoteXY.roll = attitude_acc(1);
+  RemoteXY.pitch = attitude_acc(2);
+
+  kalman_filter_attitude();
+  kalman_filter_hight();
+
+  Serial << "g:9.8,"
+         << "g_neg:-9.8,"
+         << "acc_x:" << acc(0) << ","
+         << "acc_y:" << acc(1) << ","
+         << "acc_z:" << acc(2) << "\n";
+     //    << "att_x_acc:" << attitude_acc(0) << ","
+     //    << "att_y_acc:" << attitude_acc(1) << ","
+     //    << "att_z_acc:" << attitude_acc(2) << ","
+     //    << "att_x_kalman:" << attitude_kalman(0) << ","
+     //    << "att_y_kalman:" << attitude_kalman(1) << ","
+     //    << "att_z_kalman:" << attitude_kalman(2) << "\n";
+     //   << "acc_z_inertial:"     << acc_vert            << ","
+     //    << "vertical_velocity:"  << v_vert               << ","
+     //    << "altitude_baro:"      << altitude_baro        << ","
+     //    << "h_baro:"             << h_baro               << ","
+     //    << "h_kalman:"           << S_h(0,0)             << ","
+     //    << "v_kalman:"           << S_h(1,0)             << "\n"; 
+  //Serial << attitude_kalman << '\n';*/
+
+
+  //STATI
+  Serial.println("Switch");
+  Serial.println(stato);
+  switch(stato){
+    case 1:
+    Serial.println("Case 1");
+    //instaurazione connessione utente-razzo set_up
+    //Aggiornamento interfaccia
+    aggiornamento();
+    //if connessione stabilita {stato=2;}
+    if(RemoteXY_isConnected()){
+      stato=2;
+    }
+    break;
+    case 2:
+    Serial.println("Case 2");
+    //Aggiornamento interfaccia utente 
+    aggiornamento();
+    //if passaggio pressione al livello del mare{stato=3;}
+    if(RemoteXY.sea_level){
+      stato=3;
+      tone(BUZZER_PIN, 2000, 500);
+    }
+    break;
+    case 3:
+    //Aggiornamento interfaccia utente 
+    aggiornamento();
+    //Inizializzazione del ground
+    readBaro();
+    base_altitude=h_baro;
+    //Inizio Calcolo Assetto e altezza da terra, azione che continua per tutta la durata del volo
+    calc_attitude_acc();
+    //aggiorna interfaccia con assetto 
+    RemoteXY_Handler();
+    //Feedback positivo dell'utente per partite{stato=4;}
+    if(RemoteXY.start){
+      stato=4;
+      tone(BUZZER_PIN, 3000, 1000);
+    }
+    break; 
+    case 4: //Controlli preparatori
+    //Aggiornamento interfaccia utente 
+    aggiornamento();
+
+    int controllo=1;
+    //Controllo livello batteria LIPO tramite voltometro
+    if(RemoteXY.battery_percentage<=30){
+      //Errore batteria scarica
+      strcat("KO Batteria ", RemoteXY.errore);
+      controllo=0;
+    }
+    //Controllo SD
+    if(!RemoteXY.sd_check){
+      //Errore SD non inserita
+      strcat("NO SD ", RemoteXY.errore);
+      controllo=0;
+    }
+    //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
+    float mod_attitude_acc=mod(attitude_acc);
+    if(mod_attitude_acc<=9.6 || mod_attitude_acc>=10.1){
+      //ERRORE corpo non totalmente fermo
+      strcat("NO fermo ", RemoteXY.errore);
+      controllo=0;
+    }
+    //Controllo angoli Roll e Pitch con valore 0 , accelerometro e giroscopio
+    if(RemoteXY.yaw==0 && RemoteXY.pitch==0){
+      //ERRORE Roll e/o Pitch non sono a zero
+      strcat("NO Posizione ", RemoteXY.errore);
+      controllo=0;
+      }
+    //Controllo della continuità sulle micce 
+    if(RemoteXY.pyro_1_continuity==0 || RemoteXY.pyro_2_continuity==0 || RemoteXY.pyro_4_continuity==0){            
+      //ERRORE Non continuità delle micce
+      strcat("NO continuità", RemoteXY.errore);
+      controllo=0;
+    }
+    if(controllo){
+      stato=5;
+    } 
+    break; /*
+    case 5:
+    //Calcolo Assetto e altezza da terra
+    calc_attitude_acc();
+
+    //Interfaccia utente R
+    //accensione motore
+    t0=millis();//quando acceso motore
+    //raccolta dati(S)
+    
+    //accensione corretta
+    if(acc(0)>10){
+      stato=6;
+      
+    }else if(millis()-t0>3000){
+      stato=11;
+    }
+    break;
+    case 6:
+    //Controllo pressione tramite il barometro (convertito in un’altezza approssimativa)
+    //Controllo accensione motore (registrazione del t in cui si spegne)
+    //Controllo angoli Roll e Pitch imponendo dei valori massimi di oscillazione (y e z) con Logg
+    //unione delle misure con un algoritmo di sensor fusion
+    kalman_filter_hight();
+    //condizione: if( (h(t-1)-h(t)<0 && deltaT>100) || 6.T>t){stato=7;}
+    if(h0-h1<0 && deltaT>100){
+      stato=7;
+    }
+    break;
+    case 7:
+    //Accensione prima carica di espulsione
+    if(7.T>1){stato=8;
+    }else if(|a|=9.81 || h>10){stato=9;}
+    break;
+    case 8:
+    //Accensione seconda carica di espulsione
+    // if(|a|=9.81 || h>10){stato=9;}
+    break;
+    case 9:
+    //Logging apertura paracadute 
+    //if(|a|=9.81 && h<2.5){stato=10;}
+    break;
+    case 10:
+    //Raccolta dati(R)
+    //trasferimento di dati su flash su SD
+    //segnale acustico
+    break;
+    case 11:
+    //si accende segnale acustico
+    break;
+    */
+  }
+    
 }

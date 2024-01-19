@@ -265,8 +265,6 @@ void setup() {
 
 
 
-// ========================= LOOP =========================
-
 void setReports(void) {
   RemoteXY.battery_percentage = 0;
   Serial.println("setReports");
@@ -476,6 +474,7 @@ void cal_acc() {
 
 
 // ============ LOOP ============
+
 void loop() {
   if (inizio == 0) inizio = millis();
   else if (millis() - inizio > 30000){

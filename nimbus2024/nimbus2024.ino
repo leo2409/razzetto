@@ -20,15 +20,15 @@
 using namespace BLA;
 
 //colori led
-#define ledbianco (digitalWrite(RGB_BUILTIN, HIGH))  // Turn the RGB LED white
-#define ledspento (digitalWrite(RGB_BUILTIN, LOW))   // Turn the RGB LED off
-#define ledrosso  (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,0)) // Red
-#define ledverde  (neopixelWrite(RGB_BUILTIN,0,RGB_BRIGHTNESS,0)) // Green
-#define ledblue   (neopixelWrite(RGB_BUILTIN,0,0,RGB_BRIGHTNESS)) // Blue
-#define ledazzurro (neopixelWrite(RGB_BUILTIN,0,RGB_BRIGHTNESS,RGB_BRIGHTNESS)) // Azzurro
-#define ledviola   (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,RGB_BRIGHTNESS)) // Viola
-#define ledgiallo  (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,RGB_BRIGHTNESS,0)) // Giallo
-#define ledoffblack (neopixelWrite(RGB_BUILTIN,0,0,0)) // Off / black
+#define ledbianco() ()(digitalWrite(RGB_BUILTIN, HIGH))  // Turn the RGB LED white
+#define ledspento() (digitalWrite(RGB_BUILTIN, LOW))   // Turn the RGB LED off
+#define ledrosso()  (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,0)) // Red
+#define ledverde()  (neopixelWrite(RGB_BUILTIN,0,RGB_BRIGHTNESS,0)) // Green
+#define ledblue()  (neopixelWrite(RGB_BUILTIN,0,0,RGB_BRIGHTNESS)) // Blue
+#define ledazzurro() (neopixelWrite(RGB_BUILTIN,0,RGB_BRIGHTNESS,RGB_BRIGHTNESS)) // Azzurro
+#define ledviola()   (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,RGB_BRIGHTNESS)) // Viola
+#define ledgiallo()  (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,RGB_BRIGHTNESS,0)) // Giallo
+#define ledoffblack() (neopixelWrite(RGB_BUILTIN,0,0,0)) // Off / black
 
 // definire pin per connessioni
 #define BUZZER_PIN 21
@@ -135,8 +135,13 @@ sh2_SensorValue_t sensorValueIMU;
 // STATO
 int stato = 1;
 
-// FILE NELLA FLASH
+// FILES NELLA FLASH
 File file_flash;
+int bytesWritten_flash=0;
+char* linea = (char *)malloc(1000 * sizeof(char));
+
+File log_flash;
+int bytesWritten_log=0;
 
 // vettori di stato
 // accelerometro vettore colonna
@@ -231,10 +236,17 @@ void setup() {
   }
   // apertura file flash
   file_flash = SPIFFS.open("/dati_flash.csv", "w");
+  bytesWritten_flash += file_flash.println("v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z");
   if (!file_flash) {
     Serial.println("Errore aprendo il file dati_flash in scrittura");
-    while (1)
-      ;
+    while (1);
+  }
+
+  log_flash= SPIFFS.open("/log_flash.csv", "w");
+  bytesWritten_log += file_flash.println("Eventi importanti");
+  if (!log_flash) {
+    Serial.println("Errore aprendo il file dati_flash in scrittura");
+    while (1);
   }
   
   // INIZIALIZZO SENSORI
@@ -389,13 +401,13 @@ void readBaro() {
 
 
 void setGroundAltitude(){
-  ledgiallo;
+  ledgiallo();
   for (int i = 0; i < 1000; i++) {
     readBaro();
     base_altitude += altitude_baro;
   }
   base_altitude /= 1000;
-  ledspento;
+  ledspento();
 }
 
 void readIMU() {
@@ -466,6 +478,13 @@ void calc_attitude_acc() {
   attitude_acc(0) = degrees(attitude_acc(0));
   attitude_acc(1) = degrees(attitude_acc(1));
   attitude_acc(2) = degrees(attitude_acc(2));
+}
+
+void print_su_flash() {
+  // tempo, v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z
+  sprintf(linea, "%lf%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", millis(), v_kalman, h_kalman, attitude_kalman(0), attitude_kalman(1), attitude_kalman(2), gyro(0), gyro(1), gyro(2), h_baro, acc(0), acc(1), acc(2), mag(0), mag(1),mag(2));
+  Serial.println(linea);
+  bytesWritten_flash += file_flash.println(linea);
 }
 
 // ======== kalman ==========
@@ -674,37 +693,37 @@ void loop() {
     case 4:{ //Controlli preparatori
     //Aggiornamento interfaccia utente 
     updateUI();
-    //string s="";
+    char* s = (char *)malloc(100 * sizeof(char));
     bool controllo=true;
     //Controllo livello batteria LIPO tramite voltometro
     if(RemoteXY.battery_percentage<=30){
       //Errore batteria scarica
-      //strcat("KO Batteria ", s);
+      strcat("KO Batteria ", s);
       controllo=false;
     }
     //Controllo SD
     if(!RemoteXY.sd_check){
       //Errore SD non inserita
-      //strcat("NO SD ", s);
+      strcat("NO SD ", s);
       controllo=false;
     }
     //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
     stima_stato_razzo();
     if(v_kalman<=-0.2 || v_kalman>=0.2){
       //ERRORE corpo non totalmente fermo
-      //strcat("NO fermo ", s);
+      strcat("NO fermo ", s);
       controllo=false;
     }
     //Controllo angoli Roll e Pitch con valore 0 , accelerometro e giroscopio
-    if(RemoteXY.yaw==0 && RemoteXY.pitch==0){
+    if(RemoteXY.yaw>=30 || RemoteXY.yaw<=-30 || RemoteXY.pitch<=-30 || RemoteXY.pitch>=30){
       //ERRORE Roll e/o Pitch non sono a zero
-      //strcat("NO Posizione ", s);
+      strcat("NO Posizione ", s);
       controllo=false;
     }
     //Controllo della continuità sulle micce 
     if(RemoteXY.pyro_1_continuity==0 || RemoteXY.pyro_2_continuity==0 || RemoteXY.pyro_4_continuity==0){            
       //ERRORE Non continuità delle micce
-      //strcat("NO continuità", s);
+      strcat("NO continuità", s);
       controllo=false;
     }
     //strcpy(RemoteXY.errore, s);
@@ -715,22 +734,47 @@ void loop() {
     case 5:{
     //stima razzo
     stima_stato_razzo();
+    //raccolta dati(S):
+    file_flash.println();
+    // count down con aggiorno interfaccia
+    for(int i=0; i<9; i++){
+      int n=i/2+100;
+      tone(BUZZER_PIN, n, 100);
+    }
     //Interfaccia utente R
     updateUI();
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
+
+    // accensione motore
+    pinMode(PYRO_4, OUTPUT);
+    ledrosso();
     //accensione motore
     t_accensionemotore=millis();//quando acceso motore
-    //raccolta dati(S)
-    
+    // log provo ad accendere il motore
+    bytesWritten_log+= log_flash.println(t_accensionemotore+"provo ad accendere il motore");
+    bool acceso = false;
+    digitalWrite(PYRO_4, HIGH);
+    while (millis() - t_accensionemotore < 2000 && !acceso) {
+      stima_stato_razzo();
+      if (acc(0)>=ACCTRASHOLD){
+        acceso=true;
+      }
+    }
+    digitalWrite(PYRO_4, LOW);
+    tone(BUZZER_PIN, 0);
+
     //accensione corretta FA DEI TEST
-    if(acc(0)>=ACCTRASHOLD){
+    stima_stato_razzo();
+    if(acceso || acc(0)>=ACCTRASHOLD){
+      bytesWritten_log+= log_flash.println(millis()+"accensione corretta del motore");
       stato=6;
     }else if(millis()-t_accensionemotore>3000){
+      bytesWritten_log+= log_flash.println(millis()+"accensione non corretta del motore");
       stato=11;
     }
     }break; /*
-    case 6:
+    case 6:{ 
   
     //Controllo pressione tramite il barometro (convertito in un’altezza approssimativa)
     //Controllo accensione motore (registrazione del t in cui si spegne)
@@ -741,28 +785,28 @@ void loop() {
     if(h0-h1<0 && deltaT>100){
       stato=7;
     }
-    break;
+    }break;
     case 7:
     //Accensione prima carica di espulsione
     if(7.T>1){stato=8;
     }else if(|a|=9.81 || h>10){stato=9;}
     break;
-    case 8:
+    case 8:{
     //Accensione seconda carica di espulsione
     // if(|a|=9.81 || h>10){stato=9;}
-    break;
-    case 9:
+    }break;
+    case 9:{
     //Logging apertura paracadute 
     //if(|a|=9.81 && h<2.5){stato=10;}
-    break;
-    case 10:
+    }break;
+    case 10:{
     //Raccolta dati(R)
     //trasferimento di dati su flash su SD
     //segnale acustico
-    break;
-    case 11:
+    }break;
+    case 11:{
     //si accende segnale acustico
-    break;
+    }break;
    */ 
   }
 }

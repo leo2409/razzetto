@@ -135,7 +135,7 @@ sh2_SensorValue_t sensorValueIMU;
 // STATO
 int stato = 1;
 
-// FILES NELLA FLASH
+// FILE NELLA FLASH
 File file_flash;
 int bytesWritten_flash=0;
 char* linea = (char *)malloc(1000 * sizeof(char));
@@ -239,7 +239,8 @@ void setup() {
   bytesWritten_flash += file_flash.println("v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z");
   if (!file_flash) {
     Serial.println("Errore aprendo il file dati_flash in scrittura");
-    while (1);
+    while (1)
+      ;
   }
 
   log_flash= SPIFFS.open("/log_flash.csv", "w");
@@ -349,8 +350,6 @@ void stima_stato_razzo() {
 
     // calcolo acc vert
     calc_acc_vert();
-    // calcolo la velocità verticale (integrazione eulero all'indietro)
-    v_vert = v_vert + acc_vert * dt_acc;
     // aggiorno il tempo di campionamento nella matrice di transizione dello stato 
     A_h(0,1) = dt_acc;
     // aggiorno la matrice degli ingressi B
@@ -380,9 +379,9 @@ void stima_stato_razzo() {
 
 void calc_acc_vert() {
   // calcolo l'accelerazione sull'asse z inerziale
-  acc_vert =  - sin(degToRad(attitude_kalman(1))) * acc(2)
-              + cos(degToRad(attitude_kalman(1))) * sin(degToRad(attitude_kalman(2))) * acc(1)
-              - cos(degToRad(attitude_kalman(1))) * cos(degToRad(attitude_kalman(2))) * acc(0);
+  acc_vert =  + sin(degToRad(attitude_kalman(1))) * acc(2)
+              - cos(degToRad(attitude_kalman(1))) * sin(degToRad(attitude_kalman(2))) * acc(1)
+              + cos(degToRad(attitude_kalman(1))) * cos(degToRad(attitude_kalman(2))) * acc(0);
   
   // tolgo la gravità
   acc_vert = acc_vert - 9.81;
@@ -391,7 +390,11 @@ void calc_acc_vert() {
 void readBaro() {
   new_baro = false;
   if (last_sample_bmp == 0 || millis() - last_sample_bmp > 10) {
-    altitude_baro = bmp.readAltitude(sealevelpressure);
+    if(sealevelpressure==0){
+      altitude_baro = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+    }else{
+      altitude_baro = bmp.readAltitude(sealevelpressure);
+    }
     n_campioni_baro++;
     new_baro = true;
     last_sample_bmp = millis();
@@ -436,7 +439,7 @@ void readIMU() {
         dt_acc = (mill - last_sample_acc) * 0.001;
       }
       last_sample_acc = mill;
-      cal_acc();
+      //cal_acc();
       
       n_campioni_acc++;
       new_acc = true;
@@ -472,8 +475,8 @@ void cal_acc() {
 }
 
 void calc_attitude_acc() {
-  attitude_acc(1) = atan2(-acc(2), sqrt(pow(acc(1), 2) + pow(acc(0), 2)));
-  attitude_acc(2) = atan2(acc(1), -acc(0));
+  attitude_acc(1) = atan2(acc(2), sqrt(pow(acc(1), 2) + pow(acc(0), 2)));
+  attitude_acc(2) = atan2(-acc(1), acc(0));
   attitude_acc(0) = atan2(mag(0) * sin(attitude_acc(1)) - mag(1) * cos(attitude_acc(1)), mag(2) * cos(attitude_acc(2)) + sin(attitude_acc(2)) * (mag(1) * sin(attitude_acc(1)) + mag(0) * cos(attitude_acc(1))));
   attitude_acc(0) = degrees(attitude_acc(0));
   attitude_acc(1) = degrees(attitude_acc(1));
@@ -482,10 +485,12 @@ void calc_attitude_acc() {
 
 void print_su_flash() {
   // tempo, v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z
-  sprintf(linea, "%lf%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", millis(), v_kalman, h_kalman, attitude_kalman(0), attitude_kalman(1), attitude_kalman(2), gyro(0), gyro(1), gyro(2), h_baro, acc(0), acc(1), acc(2), mag(0), mag(1),mag(2));
+  long unsigned int t= millis();
+  sprintf(linea, "%lu, %f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", t, v_kalman, h_kalman, attitude_kalman(0), attitude_kalman(1), attitude_kalman(2), gyro(0), gyro(1), gyro(2), h_baro, acc(0), acc(1), acc(2), mag(0), mag(1),mag(2));
   Serial.println(linea);
   bytesWritten_flash += file_flash.println(linea);
 }
+
 
 // ======== kalman ==========
 
@@ -629,28 +634,27 @@ void loop() {
   RemoteXY.roll = attitude_acc(1);
   RemoteXY.pitch = attitude_acc(2);
 
-  Serial << "g:180"
-         << "g_neg:-180,"
+  Serial << "g:2,"
+         << "g_neg:-2,"
      //    << "acc_x:" << acc(0) << ","
      //    << "acc_y:" << acc(1) << ","
      //    << "acc_z:" << acc(2) << ","
-           << "gyro_x:" << gyro(0) << ","
-           << "gyro_y:" << gyro(1) << ","
-           << "gyro_z:" << gyro(2) << ","
-           << "att_x_acc:" << attitude_acc(0) << ","
-           << "att_y_acc:" << attitude_acc(1) << ","
-           << "att_z_acc:" << attitude_acc(2) << ","
-     //    << "att_x_kalman:" << attitude_kalman(0) << ","
-     //    << "att_y_kalman:" << attitude_kalman(1) << ","
-     //    << "att_z_kalman:" << attitude_kalman(2) << "\n";
-     //   << "acc_vert:"     << acc_vert            << "\n";
-     //    << "vertical_velocity:"  << v_vert               << ","
+     //      << "gyro_x:" << gyro(0) << ","
+     //      << "gyro_y:" << gyro(1) << ","
+     //      << "gyro_z:" << gyro(2) << ","
+     //     << "att_x_acc:" << attitude_acc(0) << ","
+     //     << "att_y_acc:" << attitude_acc(1) << ","
+     //     << "att_z_acc:" << attitude_acc(2) << ","
+     //     << "att_x_kalman:" << attitude_kalman(0) << ","
+     //     << "att_y_kalman:" << attitude_kalman(1) << ","
+     //     << "att_z_kalman:" << attitude_kalman(2) << ","
+            << "acc_vert:"     << acc_vert            << ","
      //    << "altitude_baro:"      << altitude_baro        << ","
-     //    << "h_baro:"             << h_baro               << ","
-            << "h_kalman:"           << S_h(0,0)             << ","
-            << "v_kalman:"           << S_h(1,0)             << "\n"; 
+            << "h_baro:"             << h_baro               << ","
+            << "h_kalman:"           << h_kalman             << ","
+            << "v_kalman:"           << v_kalman             << "\n";
   //Serial << attitude_kalman << '\n';*/
-    
+  
   //STATI
   Serial.println("Switch");
   Serial.println(stato);
@@ -698,32 +702,32 @@ void loop() {
     //Controllo livello batteria LIPO tramite voltometro
     if(RemoteXY.battery_percentage<=30){
       //Errore batteria scarica
-      strcat("KO Batteria ", s);
+      strcat(s, "KO Batteria ");
       controllo=false;
     }
     //Controllo SD
     if(!RemoteXY.sd_check){
       //Errore SD non inserita
-      strcat("NO SD ", s);
+      strcat(s,"NO SD ");
       controllo=false;
     }
     //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
     stima_stato_razzo();
     if(v_kalman<=-0.2 || v_kalman>=0.2){
       //ERRORE corpo non totalmente fermo
-      strcat("NO fermo ", s);
+      strcat(s, "NO fermo ");
       controllo=false;
     }
     //Controllo angoli Roll e Pitch con valore 0 , accelerometro e giroscopio
     if(RemoteXY.yaw>=30 || RemoteXY.yaw<=-30 || RemoteXY.pitch<=-30 || RemoteXY.pitch>=30){
       //ERRORE Roll e/o Pitch non sono a zero
-      strcat("NO Posizione ", s);
+      strcat(s, "NO Posizione ");
       controllo=false;
     }
     //Controllo della continuità sulle micce 
     if(RemoteXY.pyro_1_continuity==0 || RemoteXY.pyro_2_continuity==0 || RemoteXY.pyro_4_continuity==0){            
       //ERRORE Non continuità delle micce
-      strcat("NO continuità", s);
+      strcat(s, "NO continuità");
       controllo=false;
     }
     //strcpy(RemoteXY.errore, s);

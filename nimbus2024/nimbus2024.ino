@@ -10,6 +10,10 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP3XX.h>
 // file sistem
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
+#include "SPIFFS.h"
 #include <FS.h>
 #include <SPIFFS.h>
 // linear algebra
@@ -51,10 +55,15 @@ using namespace BLA;
 // voltaggio pin voltage batteria
 #define MAX_VOLTAGE 0.7368  // Batteria 100% 4.2V -> 0.7368V
 #define MIN_VOLTAGE 0.6491  // batteria   0% 3.7V -> 0.6491V
+#define VOLTAGE_PIN 1
 
 
 #define SEALEVELPRESSURE_HPA (1013.25)
+// valori specifici della configurazione e del lancio (razzo e motore)
 #define ACCTRASHOLD 20
+#define DURATA_MOTORE 0
+#define MAX_DURATA_FLIGHT 6800
+
 
 //////////////////////////////////////////////
 //        RemoteXY include library          //
@@ -66,13 +75,13 @@ using namespace BLA;
 // RemoteXY select connection mode and include library 
 #define REMOTEXY_MODE__ESP32CORE_WIFI_POINT
 #include <WiFi.h>
+
 #include <RemoteXY.h>
 
 // RemoteXY connection settings 
 #define REMOTEXY_WIFI_SSID "Razzetto"
 #define REMOTEXY_WIFI_PASSWORD "nimbus2024"
 #define REMOTEXY_SERVER_PORT 6377
-#define REMOTEXY_ACCESS_PASSWORD "nimbus2024"
 
 
 // RemoteXY configurate  
@@ -82,7 +91,7 @@ uint8_t RemoteXY_CONF[] =   // 355 bytes
   16,22,8,7,7,1,121,0,129,0,3,3,13,3,8,77,73,67,82,79,
   45,83,68,0,129,0,21,3,9,3,8,80,89,82,79,32,49,0,129,0,
   35,3,9,3,8,80,89,82,79,32,50,0,129,0,48,3,9,3,8,80,
-  89,82,79,32,51,0,70,16,36,8,7,7,1,121,0,70,16,49,8,7,
+  89,82,79,32,52,0,70,16,36,8,7,7,1,121,0,70,16,49,8,7,
   7,1,121,0,66,129,5,21,15,4,2,26,129,0,10,17,13,3,8,66,
   65,84,84,69,82,89,0,71,56,2,33,19,19,0,2,24,255,0,0,52,
   195,0,0,52,67,0,0,52,66,0,0,32,65,0,0,160,64,24,0,71,
@@ -96,8 +105,7 @@ uint8_t RemoteXY_CONF[] =   // 355 bytes
   69,76,0,129,0,45,90,8,3,31,83,84,65,82,84,0,10,48,26,89,
   10,10,4,1,31,79,78,0,31,79,70,70,0,129,0,37,92,8,3,24,
   83,84,65,82,84,0,67,4,6,84,53,4,2,26,101 };
-
-
+  
 // this structure defines all the variables and events of your control interface 
 struct {
 
@@ -118,12 +126,12 @@ struct {
   char battery_percentage_string[11];  // string UTF8 end zero 
   char errore[101];  // string UTF8 end zero 
 
-
     // other variable
   uint8_t connect_flag;  // =1 if wire connected, else =0 
 
 } RemoteXY;
 #pragma pack(pop)
+
 
 /////////////////////////////////////////////
 //           END RemoteXY include          //
@@ -145,8 +153,20 @@ File file_flash;
 int bytesWritten_flash=0;
 char* linea = (char *)malloc(1000 * sizeof(char));
 
-File log_flash;
+File file_log;
 int bytesWritten_log=0;
+
+//FILE SD
+File flash_sd;
+File log_sd;
+
+// preference per variabili su flash
+#include <Preferences.h>
+
+Preferences preferences;
+// numero del lancio
+unsigned int n_flight;
+
 
 // vettori di stato
 // accelerometro vettore colonna
@@ -154,7 +174,7 @@ BLA::Matrix<3> acc = { 0, 0, 0 };
 // accelerazione verticale
 float acc_vert = 0;
 // velocità verticale e altezza
-float base_altitude = -54;
+float base_altitude = 0;
 float altitude_baro = 0;
 float h_baro = 0;
 float sealevelpressure=0;
@@ -167,6 +187,8 @@ BLA::Matrix<2,2>  U_h = {  0,  0,
                            0,  0  };
 float std_dev_acc = pow(0.50,2); // 0.10^2 m/s^2 deviazione standard acc
 BLA::Matrix<1,1> std_dev_baro = { pow(0.2 , 2) }; // 0.2 m incertezza sul barometro
+float std_dev_acc_attitude = pow(3,2); // deviazione standard acc su attitude
+float std_dev_mag_attitude = pow(5,2); // deviazione standard mag su attitude
 BLA::Matrix<2,1> K_h = {  0,  0   };
 BLA::Matrix<2,2> I = {  1,  0,
                         0,  1,  };
@@ -180,14 +202,15 @@ BLA::Matrix<3> attitude_kalman = { 0, 90, 90 };
 BLA::Matrix<3> attitude_acc = { 0, 0, 0 };
 BLA::Matrix<3> uncertainty_attitude = { 5 * 5, 2 * 2, 2 * 2 };
 BLA::Matrix<3> kalman_gain = { 0, 0, 0, };
-float h_kalman;
-float v_kalman;
+float h_kalman = 0;
+float v_kalman = 0;
 
 
 long int last_sample_gyro = 0;
 float dt_gyro = 0;
 long int last_sample_acc = 0;
 float dt_acc = 0;
+long int last_sample_bmp = 0;
 
 // variabili che indicano se nella corrente iterazione del loop sono arrivati dei campioni dei sensori indicati
 bool new_acc = false;
@@ -196,13 +219,24 @@ bool new_mag = false;
 bool new_baro = false;
 unsigned long t_accensionemotore=0;
 unsigned long int t6;
+unsigned long int t7;
+unsigned long int t8;
+unsigned long int t9;
 
 
 // matrici calibrazione accelerometro
-BLA::Matrix<3, 3> A_cal_acc = { -0.9991, 0.0176, 0.0148,
-                                -0.0056, -1.0099, 0.0233,
-                                -0.0104, 0.0411, -1.0033 };
-BLA::Matrix<3> b_cal_acc = { -0.1896, 0.1196, -0.2021 };  // vettore colonna*/
+BLA::Matrix<3, 3> A_cal_acc = { 1.0084 ,  0.0111,   -0.0143,
+                                0.0119,   0.9996,   0.0145,
+                                0.0028,   0.0139,   1.0010 };
+BLA::Matrix<3> b_cal_acc = { 0.1498,   0.1510,   0.1626 };
+
+// parametri utili per i sensori e il conteggio dei campioni
+int inizio = 0;
+int n_campioni_acc = 0;
+int n_campioni_gyro = 0;
+int n_campioni_magn = 0;
+int n_campioni_baro = 0;
+char stampa[100];
 
 void setup() {
 
@@ -232,6 +266,17 @@ void setup() {
   Wire.begin();
   Wire.setClock(3400000); // ottimo trovato con 10 ore di lavoro
 
+  // PREFERENCE
+  // preference per variabili su flash
+  if (!preferences.begin("my-app", false)) {
+    Serial.println("Errore nel begin di preference");
+    while (1)
+      ;
+  }
+  n_flight = preferences.getUInt("n_flight", 0);
+  Serial.println("PREFERENCES:\tOK");
+  Serial.print("numero di flight: ");
+  Serial.println(n_flight);
   // FILESISTEM
   if (SPIFFS.begin()) {
     Serial.println("SPIFFS:\tOK");
@@ -240,8 +285,16 @@ void setup() {
     while (1)
       ;
   }
+  // list dei file sulla flash
+  list_file_flash();
+  // se ci sta qualcosa sposto tutto su sd 
+  if (move_file_flash_sd("/dati_vecchi")) {
+    // se riesco a spostare i file elimino tutti i file sulla flash
+    remove_file_flash();
+  }
+
   // apertura file flash
-  file_flash = SPIFFS.open("/dati_flash.csv", "w");
+  file_flash = SPIFFS.open(String("/dati_flash_") + n_flight + String(".csv"), "w");
   bytesWritten_flash += file_flash.println("v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z");
   if (!file_flash) {
     Serial.println("Errore aprendo il file dati_flash in scrittura");
@@ -249,12 +302,12 @@ void setup() {
       ;
   }
 
-  log_flash= SPIFFS.open("/log_flash.csv", "w");
-  bytesWritten_log += file_flash.println("Eventi importanti");
-  if (!log_flash) {
+  file_log = SPIFFS.open(String("/file_log_") + n_flight + String(".txt"), "w");
+  if (!file_log) {
     Serial.println("Errore aprendo il file dati_flash in scrittura");
     while (1);
   }
+  bytesWritten_log += file_log.println("Eventi importanti");
   
   // INIZIALIZZO SENSORI
   // BNO085 IMU
@@ -279,18 +332,6 @@ void setup() {
 
   Serial.println("FINE SETUP");
   delay(1000);
-  
-  // TODO: SPOSTARE IN LOOP
-  // setto altezza di partenza
-  // tolgo i primi 10 valori perché sono difettati
-  for (int i = 0; i < 10; i++) {
-    while (!bmp.performReading()) {
-      Serial.println("Failed to perform reading :(");
-    }
-  }
-  // prendo 100 misurazioni e faccio la media
-  // altitudine terra
-  Serial << "altitudine terra: " << base_altitude << "\n";
   delay(5000);
   
 }
@@ -298,7 +339,6 @@ void setup() {
 
 
 void setReports(void) {
-  RemoteXY.battery_percentage = 0;
   Serial.println("setReports");
   if (!bno08x.enableReport(SH2_RAW_ACCELEROMETER, 4000)) {
     Serial.println("Could not enable raw accelerometer");
@@ -311,16 +351,104 @@ void setReports(void) {
   }
 }
 
-// parametri utili per i sensori e il conteggio dei campioni
-int inizio = 0;
-int n_campioni_acc = 0;
-int n_campioni_gyro = 0;
-int n_campioni_magn = 0;
-int n_campioni_baro = 0;
-int last_sample_bmp = 0;
-char stampa[100];
+// ================== FILESYSTEM ===========================
 
-// ========================= FUNZIONI =========================
+void list_file_flash() {
+  // list dei file
+  File root = SPIFFS.open("/");
+  File file = root.openNextFile();
+  Serial.println("list dei file su flash: ");
+  while (file) {
+    Serial.print("FILE: ");
+    Serial.println(file.name());
+
+    file = root.openNextFile();
+  }
+  Serial.println();
+  file.close();
+  root.close();
+}
+
+bool move_file_flash_sd(String dir) {
+  ledgiallo();
+  // mount della sd
+  if (!SD.begin()) {
+    Serial.println("Card Mount Failed");
+    return false;
+  }
+  // creazione della dir se non esiste già
+  SD.mkdir(dir);
+  // list dei file
+  File root_flash = SPIFFS.open("/");
+  File file = root_flash.openNextFile();
+  while (file) {
+    Serial.print("sposto il file: ");
+    Serial.println(file.name());
+    // apro un file su sd con lo stesso nome del file su flash
+    String file_path = file.name();
+    file_path = dir + "/" + file_path;
+    // nome del file sulla sd
+    Serial.print("creazione file: ");
+    Serial.println(file_path);
+    // creazione file su sd
+    File file_sd = SD.open(file_path, FILE_WRITE);
+    // controllo che si sia aperto
+    if (!file_sd) {
+      Serial.println("Impossibile aprire il file su sd in scrittura");
+      while (1)
+        ;
+    }
+    Serial.println("inizio a spostare il file sulla sd");
+    String riga_da_spostare = "";
+    while (file.available()) {
+      riga_da_spostare = file.readStringUntil('\n');
+      file_sd.println(riga_da_spostare);
+    }
+    // chiudo file sd
+    file_sd.close();
+    // chiudo file su flash
+    file.close();
+    // passo al file successivo
+    file = root_flash.openNextFile();
+  }
+  root_flash.close();
+  ledspento();
+  return true;
+}
+
+void remove_file_flash() {
+  Serial.println("remove");
+  ledgiallo();
+  File root = SPIFFS.open("/");
+  File file = root.openNextFile();
+  while (file) {
+    Serial.print("elimino il file: ");
+    Serial.println("/" + String(file.name()));
+    // elimino il file
+    SPIFFS.remove("/" + String(file.name()));
+    // passo al file successivo
+    file.close();
+    file = root.openNextFile();
+  }
+  root.close();
+  ledspento();
+}
+
+
+void print_su_flash() {
+  // tempo, v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z
+  long unsigned int t = millis();
+  sprintf(linea, "%lu, %f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", t, v_kalman, h_kalman, attitude_kalman(0), attitude_kalman(1), attitude_kalman(2), gyro(0), gyro(1), gyro(2), h_baro, acc(0), acc(1), acc(2), mag(0), mag(1), mag(2));
+  //Serial.println(linea);
+  bytesWritten_flash += file_flash.print(linea);
+}
+
+void log_flash(String log) {
+  log = String(millis()) + String(": ") + log + String(" altezza: ") + String(h_kalman)+ String("\n");
+  bytesWritten_log += file_log.print(log);
+}
+
+// ========================= KALMAN =========================
 // stimo lo stato del razzo (orientazione, velocità verticale e altezza dal suolo) 
 void stima_stato_razzo() {
   readIMU();
@@ -329,28 +457,24 @@ void stima_stato_razzo() {
     // predizione dell'orientazione
     attitude_kalman = attitude_kalman + gyro * dt_gyro;
     // aggiorno incertezza sulla predizione
-    uncertainty_attitude(0) = uncertainty_attitude(0) + pow(dt_gyro, 2) * 2 * 2;  // 4*4 è la deviazione standard del giroscopio
+    uncertainty_attitude(0) = uncertainty_attitude(0) + pow(dt_gyro, 2) * 2 * 2;  // 2*2 è la deviazione standard del giroscopio
     uncertainty_attitude(1) = uncertainty_attitude(1) + pow(dt_gyro, 2) * 2 * 2;
     uncertainty_attitude(2) = uncertainty_attitude(2) + pow(dt_gyro, 2) * 2 * 2;
   }
+  // calcolo gli angoli da accelerometro e magnetometro
+  calc_attitude_acc();
 
   if (new_acc) {
-    calc_attitude_acc();
-    // calcolo kalman gain x
-    kalman_gain(0) = uncertainty_attitude(0) / (uncertainty_attitude(0) + 3 * 3);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
-    // update stima
-    attitude_kalman(0) = attitude_kalman(0) + kalman_gain(0) * (attitude_acc(0) - attitude_kalman(0));
     // calcolo kalman gain y
-    kalman_gain(1) = uncertainty_attitude(1) / (uncertainty_attitude(1) + 3 * 3);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
+    kalman_gain(1) = uncertainty_attitude(1) / (uncertainty_attitude(1) + std_dev_acc_attitude);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
     // update stima
     attitude_kalman(1) = attitude_kalman(1) + kalman_gain(1) * (attitude_acc(1) - attitude_kalman(1));
     // calcolo kalman gain z
-    kalman_gain(2) = uncertainty_attitude(2) / (uncertainty_attitude(2) + 3 * 3);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
+    kalman_gain(2) = uncertainty_attitude(2) / (uncertainty_attitude(2) + std_dev_acc_attitude);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
     // update stima
     attitude_kalman(2) = attitude_kalman(2) + kalman_gain(2) * (attitude_acc(2) - attitude_kalman(2));
 
     // aggiorno incertezza sulla stima stima
-    uncertainty_attitude(0) = (1 - kalman_gain(0)) * uncertainty_attitude(0);
     uncertainty_attitude(1) = (1 - kalman_gain(1)) * uncertainty_attitude(1);
     uncertainty_attitude(2) = (1 - kalman_gain(2)) * uncertainty_attitude(2);
 
@@ -365,7 +489,16 @@ void stima_stato_razzo() {
     S_h = A_h * S_h + B_h * acc_vert;
     // aggiorno incertezza sulla predizione
     U_h = A_h * U_h * ~A_h + (B_h * ~B_h) * std_dev_acc;
-    }
+  }
+
+  if (new_mag) {
+     // calcolo kalman gain x
+    kalman_gain(0) = uncertainty_attitude(0) / (uncertainty_attitude(0) + std_dev_mag_attitude);  // 3*3 è la deviazione standard dell'angolo misurato dall'accelerometro
+    // update stima
+    attitude_kalman(0) = attitude_kalman(0) + kalman_gain(0) * (attitude_acc(0) - attitude_kalman(0));
+    // aggiorno incertezza sulla stima stima
+    uncertainty_attitude(0) = (1 - kalman_gain(0)) * uncertainty_attitude(0);
+  }
     
   if (new_baro) {
     // faccio update sulla stima velocità verticale e altezza
@@ -382,16 +515,6 @@ void stima_stato_razzo() {
   h_kalman=S_h(0,0);
   v_kalman=S_h(1,0);
 }
-/*
-void calc_acc_vert() {
-  // calcolo l'accelerazione sull'asse z inerziale
-  acc_vert =  - sin(degToRad(attitude_kalman(1))) * acc(2)
-              - cos(degToRad(attitude_kalman(1))) * sin(degToRad(attitude_kalman(2))) * acc(1)
-              + cos(degToRad(attitude_kalman(1))) * cos(degToRad(attitude_kalman(2))) * acc(0);
-  
-  // tolgo la gravità
-  acc_vert = acc_vert - 9.81;
-}*/
 
 void calc_acc_vert() {
   // Calcolo dell'accelerazione sull'asse x inerziale
@@ -407,7 +530,7 @@ void calc_acc_vert() {
 
 void readBaro() {
   new_baro = false;
-  if (last_sample_bmp == 0 || millis() - last_sample_bmp > 10) {
+  if ( millis() - last_sample_bmp > 10) {
     if(sealevelpressure==0){
       altitude_baro = bmp.readAltitude(SEALEVELPRESSURE_HPA);
     }else{
@@ -421,13 +544,23 @@ void readBaro() {
 }
 
 
-void setGroundAltitude(){
+void setGroundAltitude() {
   ledgiallo();
-  for (int i = 0; i < 1000; i++) {
-    readBaro();
+  // faccio 50 letture per togliere eventuali primi errori
+  for (int i = 0; i < 50; i++) {
+    altitude_baro = bmp.readAltitude(sealevelpressure);
+    Serial.println(altitude_baro);
+  }
+  // prendo come base_altitude la media su 500 misurazioni
+  int n = 1000;
+  for (int i = 0; i < n; i++) {
+    altitude_baro = bmp.readAltitude(sealevelpressure);
+    Serial.println(altitude_baro);
     base_altitude += altitude_baro;
   }
-  base_altitude /= 1000;
+  base_altitude /= n;
+  Serial.print("altezza terreno: "); Serial.println(base_altitude);
+  sprintf(RemoteXY.errore, "altezza terreno: %f", base_altitude);
   ledspento();
 }
 
@@ -443,21 +576,21 @@ void readIMU() {
   
   // prendo un valore dall'imu
   while (!bno08x.getSensorEvent(&sensorValueIMU)) ;
-  //Serial.print("while readImu: "); Serial.println(millis() - t2);
   
   long int mill;
   switch (sensorValueIMU.sensorId) {
     case SH2_RAW_ACCELEROMETER:
-      acc(0) = -sensorValueIMU.un.rawAccelerometer.y / 65535. * 156.96;
-      acc(1) = sensorValueIMU.un.rawAccelerometer.x / 65535. * 156.96;
-      acc(2) = sensorValueIMU.un.rawAccelerometer.z / 65535. * 156.96;
+      acc(0) = -sensorValueIMU.un.rawAccelerometer.y  / 65535. * 156.96;
+      acc(1) = sensorValueIMU.un.rawAccelerometer.x  / 65535. * 156.96;
+      acc(2) = sensorValueIMU.un.rawAccelerometer.z  / 65535. * 156.96;
+
+      cal_acc();
       
       mill = millis();
       if (last_sample_acc != 0) {
         dt_acc = (mill - last_sample_acc) * 0.001;
       }
       last_sample_acc = mill;
-      //cal_acc();
       
       n_campioni_acc++;
       new_acc = true;
@@ -493,20 +626,21 @@ void cal_acc() {
 }
 
 void calc_attitude_acc() {
-  attitude_acc(1) = atan2(acc(2), sqrt(pow(acc(1), 2) + pow(acc(0), 2)));
-  attitude_acc(2) = atan2(-acc(1), acc(0));
-  attitude_acc(0) = - atan2(mag(0) * sin(attitude_acc(1)) - mag(1) * cos(attitude_acc(1)), mag(2) * cos(attitude_acc(2)) + sin(attitude_acc(2)) * (mag(1) * sin(attitude_acc(1)) + mag(0) * cos(attitude_acc(1))));
-  attitude_acc(0) = degrees(attitude_acc(0));
-  attitude_acc(1) = degrees(attitude_acc(1));
-  attitude_acc(2) = degrees(attitude_acc(2));
-}
-
-void print_su_flash() {
-  // tempo, v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z
-  long unsigned int t= millis();
-  sprintf(linea, "%lu, %f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", t, v_kalman, h_kalman, attitude_kalman(0), attitude_kalman(1), attitude_kalman(2), gyro(0), gyro(1), gyro(2), h_baro, acc(0), acc(1), acc(2), mag(0), mag(1),mag(2));
-  Serial.println(linea);
-  bytesWritten_flash += file_flash.println(linea);
+  if (new_acc) {
+    // calcolo gli angoli di eulero di y e z
+    attitude_acc(1) = atan2(acc(2), sqrt(pow(acc(1), 2) + pow(acc(0), 2)));
+    attitude_acc(2) = atan2(-acc(1), acc(0));
+    // converto gli angoli in gradi
+    attitude_acc(1) = degrees(attitude_acc(1));
+    attitude_acc(2) = degrees(attitude_acc(2));
+  }
+  if (new_mag) {
+    // trasformo gli angoli su y e z in
+    float acc_rad_y = degToRad(attitude_acc(1));
+    float acc_rad_z = degToRad(attitude_acc(2));
+    attitude_acc(0) = - atan2(mag(0) * sin(acc_rad_y) - mag(1) * cos(acc_rad_y), mag(2) * cos(acc_rad_z) + sin(acc_rad_z) * (mag(1) * sin(acc_rad_y) + mag(0) * cos(acc_rad_y)));
+    attitude_acc(0) = degrees(attitude_acc(0));
+  }
 }
 
 // ============= funzioni utili negli stati ============
@@ -523,6 +657,7 @@ void updateUI(){
   RemoteXY.roll=attitude_kalman(0);
   RemoteXY.pitch=attitude_kalman(1);
   RemoteXY.yaw=attitude_kalman(2);
+  RemoteXY.height=h_kalman;
 }
 
 float mod(BLA::Matrix<3> a){
@@ -560,7 +695,7 @@ void calc_batt_percentage() {
 
 // ============ LOOP ============
 
-void loop() { 
+void loop() {
   /*
   if (inizio == 0) inizio = millis();
   else if (millis() - inizio > 100000){
@@ -581,35 +716,39 @@ void loop() {
     n_campioni_magn = 0;
     n_campioni_baro = 0;
     last_sample_bmp = 0;
-  }
-  */
-  stima_stato_razzo();
+  }*/
+  
+  //stima_stato_razzo();
   //RemoteXY.yaw = attitude_acc(0);
   //RemoteXY.roll = attitude_acc(1);
   //RemoteXY.pitch = attitude_acc(2);
 
-  Serial << "g:2,"
+
+  /*
+  Serial
+         << "g:2,"
          << "g_neg:-2,"
     //     << "acc_x:" << acc(0) << ","
     //     << "acc_y:" << acc(1) << ","
-    //     << "acc_z:" << acc(2) << ","
+    //     << "acc_z:" << acc(2) << '\n';
     //       << "gyro_x:" << gyro(0) << ","
     //       << "gyro_y:" << gyro(1) << ","
     //       << "gyro_z:" << gyro(2) << "\n";
     //      << "att_x_acc:" << attitude_acc(0) << ","
     //      << "att_y_acc:" << attitude_acc(1) << ","
     //      << "att_z_acc:" << attitude_acc(2) << '\n';
-    //      << "att_x_kalman:" << attitude_kalman(0) << ","
-    //      << "att_y_kalman:" << attitude_kalman(1) << ","
-    //      << "att_z_kalman:" << attitude_kalman(2) << '\n';
+          << "att_x_kalman:" << attitude_kalman(0) << ","
+          << "att_y_kalman:" << attitude_kalman(1) << ","
+          << "att_z_kalman:" << attitude_kalman(2) << ","
           << "acc_vert:"     << acc_vert            << "," 
      //    << "altitude_baro:"      << altitude_baro        << ","
-            << "h_baro:"             << h_baro               << ","
+     //       << "h_baro:"             << h_baro               << ","
            << "h_kalman:"           << h_kalman              << ","
-            << "v_kalman:"           << v_kalman             << "\n";
-  //Serial << attitude_kalman << '\n';*/
+            << "v_kalman:"           << v_kalman             << "\n"; 
+     
+  //Serial << attitude_kalman << '\n'; */
   
-  /*
+  
   //STATI
   Serial.println("Switch");
   Serial.println(stato);
@@ -621,6 +760,7 @@ void loop() {
     updateUI();
     //if connessione stabilita {stato=2;}
     if(RemoteXY_isConnected()){
+      log_flash("si è connesso");
       stato=2;
     }
     }break;
@@ -630,6 +770,10 @@ void loop() {
     updateUI();
     //if passaggio pressione al livello del mare{stato=3;}
     if(RemoteXY.sea_level){
+      log_flash("nuova pressione del mare fornita da utente");
+      //Inizializzazione del ground
+      sealevelpressure= RemoteXY.sea_level;
+      setGroundAltitude();
       stato=3;
       tone(BUZZER_PIN, 2000, 500);
     }
@@ -640,15 +784,10 @@ void loop() {
     stima_stato_razzo();
     //Aggiornamento interfaccia utente 
     updateUI();
-    //Inizializzazione del ground
-    // TODO: FARE UNA MEDIA
-    if(base_altitude==0){
-      sealevelpressure= RemoteXY.sea_level;
-      setGroundAltitude();
-    }
     
     //Feedback positivo dell'utente per partite{stato=4;}
     if(RemoteXY.start){
+      log_flash("Feedback positivo");
       stato=4;
       tone(BUZZER_PIN, 3000, 1000);
     }
@@ -664,6 +803,7 @@ void loop() {
     sprintf(s," ");
     bool controllo = true;
     //Controllo livello batteria LIPO tramite voltometro
+    /*
     if(RemoteXY.battery_percentage<=30){
       //Errore batteria scarica
       strcat(s, "NO Batt ");
@@ -675,10 +815,11 @@ void loop() {
       //Errore SD non inserita
       strcat(s,"NO SD ");
       controllo = false;
-    }
+    }*/
     //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
     stima_stato_razzo();
-    if(v_kalman<=-0.5 || v_kalman>=0.5){
+    /*
+    if(v_kalman<=-0.6 || v_kalman>=0.2){
       //ERRORE corpo non totalmente fermo
       strcat(s, "NO Ferm ");
       controllo = false;
@@ -689,37 +830,40 @@ void loop() {
       strcat(s, "NO Pos ");
       controllo = false;
     }
+    
+    
     //Controllo della continuità sulle micce 
-    if(RemoteXY.pyro_1_continuity==0 || RemoteXY.pyro_2_continuity==0 || RemoteXY.pyro_4_continuity==0){            
+    if(RemoteXY.pyro_1_continuity==0 || RemoteXY.pyro_2_continuity==0 || RemoteXY.pyro_4_continuity==0){
       //ERRORE Non continuità delle micce
       strcat(s, "NO Pyro");
       controllo = false;
-    }
+    }*/
+    
     Serial.println(s);
-    delay(1000);
     sprintf(RemoteXY.errore, s);
     updateUI();
     if(controllo){ //passa tutti i controlli
       stato=5;
+      log_flash("controlli passati");
     } else {
       stato=11;
+      log_flash("controlli non passati");
     }
     }break; 
-    case 11:{
-    Serial.println("Caso 11");
-    //si accende segnale acustico
-    tone(BUZZER_PIN, 3000, 1000);
-    while(1);
-    }break;
     case 5:{
     //stima razzo
     stima_stato_razzo();
     //raccolta dati(S):
     print_su_flash();
     // count down con aggiorno interfaccia
-    for(int i=0; i<9; i++){
-      int n=i/2+100;
+    for(int i=1; i<10; i++){
+      int n=(i/2)*1000;
       tone(BUZZER_PIN, n, 100);
+      //stima razzo
+      stima_stato_razzo();
+      //raccolta dati(S):
+      print_su_flash();
+      RemoteXY_delay(1000);
     }
     //Interfaccia utente R
     updateUI();
@@ -732,26 +876,39 @@ void loop() {
     //accensione motore
     t_accensionemotore=millis();//quando acceso motore
     // log provo ad accendere il motore
-    bytesWritten_log+= log_flash.println(t_accensionemotore+"provo ad accendere il motore");
+    log_flash(String(" prova ad accendere il motore"));
     bool acceso = false;
     digitalWrite(PYRO_4, HIGH);
-    while (millis() - t_accensionemotore < 2000 && !acceso) {
+    while (!acceso && millis() - t_accensionemotore < 2000) {
       stima_stato_razzo();
-      if (acc(0)>=ACCTRASHOLD){
+      print_su_flash();
+      if (acc(0) >= ACCTRASHOLD){
         acceso=true;
+        t6 = millis();
       }
     }
     digitalWrite(PYRO_4, LOW);
     tone(BUZZER_PIN, 0);
+    ledoffblack();
+
+    while (!acceso) {
+      stima_stato_razzo();
+      print_su_flash();
+      if (acc(0)>=ACCTRASHOLD){
+        acceso=true;
+        t6 = millis();
+      }
+    }
 
     //accensione corretta FA DEI TEST
     stima_stato_razzo();
-    if(acceso || acc(0)>=ACCTRASHOLD){
-      bytesWritten_log+= log_flash.println(millis()+"accensione corretta del motore");
+    print_su_flash();
+    if(acceso){
+      log_flash(String("corretta accensione del motore"));
       stato=6;
-      t6=millis();
-    }else if(millis()-t_accensionemotore>3000){
-      bytesWritten_log+= log_flash.println(millis()+"accensione non corretta del motore");
+      ledblue();
+    }else {
+      log_flash(String("non corretta accensione del motore"));
       stato=11;
     }
     }break;
@@ -764,36 +921,136 @@ void loop() {
     //bytesWritten_log+=log_flash.print(t6+ " ROLL e PITCH:  ");
     //bytesWritten_log+= log_flash.println(RemoteXY.roll + " , " + RemoteXY.pitch);
     //unione delle misure con un algoritmo di sensor fusion
-    //condizione: if( (h(t-1)-h(t)<0 && deltaT>100) || 6.T>t){stato=7;}
-    if(millis() - t6>1000 || ??<=0){
+    //condizione: apogeo però dopo spegnimento motore o tempo in torno a 6.7 secondi{stato=7;}
+    if (millis() - t6 > MAX_DURATA_FLIGHT || 
+      (v_kalman<=0 && millis() - t6 > DURATA_MOTORE)) {
+      //tone(BUZZER_PIN, 5000, 1000);
+      ledgiallo();
+      log_flash(String("apogeo"));
+      stima_stato_razzo();
+      //raccolta dati:
+      print_su_flash();
       stato=7;
-      } 
-    }break; 
+      }
+    }break;
     case 7:{
     //Accensione prima carica di espulsione
-    if(7.T>1){
-      stato=8
-    }else if(|a|=9.81 || h>10){
-      stato=9;
+    bool carica1 = false;
+    tone(BUZZER_PIN, 2000);
+    t7 = millis();
+    log_flash("accensione prima miccia");
+    pinMode(PYRO_1, OUTPUT);
+    digitalWrite(PYRO_1, HIGH);
+    while (millis() - t7 < 1000) {
+      // aggiorno stato razzo
+      stima_stato_razzo();
+      print_su_flash();
+      if(acc_vert<=10.1 && acc_vert>=9.5){
+        carica1=true;
+      }
     }
-    
-    }break;
+    digitalWrite(PYRO_1, LOW);
+    noTone(BUZZER_PIN);
 
+    //se è passato un tot di tempo prova con altra carica
+    if(carica1){
+      log_flash("corretta accensione del paracadute per il nostro test");
+      // stato=9;
+    }
+    stato = 8;
+    }break;
     case 8:{
+    stima_stato_razzo();
+    print_su_flash();
     //Accensione seconda carica di espulsione
-    // if(|a|=9.81 || h>10){stato=9;}
+    bool carica2 = false;
+    t8=millis();
+    tone(BUZZER_PIN, 2000);
+    log_flash("accensione seconda miccia");
+    pinMode(PYRO_2, OUTPUT);
+    digitalWrite(PYRO_2, HIGH);
+    while (millis()-t8< 1000) {
+      if(acc_vert<=10.1 && acc_vert>=9.5){
+        carica2=true;
+      }
+    }
+    digitalWrite(PYRO_2, LOW);
+    noTone(BUZZER_PIN);
+    if(carica2){
+      log_flash("corretta apertura del paracadute per il nostro test");
+      ledazzurro();
+    }
+    stato=9;
+    t9 = millis();
     }break;
     case 9:{
-    //Logging apertura paracadute 
-    //if(|a|=9.81 && h<2.5){stato=10;}
+
+    stima_stato_razzo();
+    print_su_flash();
+    //se è fermo
+    if (v_kalman >= -0.3 && v_kalman <= 0.1) {
+        if (millis() - t9 > 200) {
+          ledazzurro();
+          tone(BUZZER_PIN, 2000, 1000);
+          stato = 10;
+        }
+    } else {
+      t9 = millis();
+    }
     }break;
     case 10:{
     //Raccolta dati(R)
+    stima_stato_razzo();
+    print_su_flash();
+    ledazzurro();
+    log_flash("sono a terra");
     //trasferimento di dati su flash su SD
+    //salvo su sd e gestisco file chiudendoli
+    file_log.close();
+    file_flash.close();
+    // sposto i file su sd
+    log_flash("sposto tutti i file su SD");
+    if (move_file_flash_sd(String("/flight_") + n_flight)) {
+      // rimuovo i file
+      remove_file_flash();
+    }
+    //aumento il contatore dei lanci
+    n_flight++;
+    // salvo il contatore
+    preferences.putUInt("n_flight", n_flight);
+    preferences.end();
     //segnale acustico
+    ledverde();
+    tone(BUZZER_PIN, 2000, 2000);
+    stato=12;
     }break;
-    
+    //caso di errore
+    case 11:{
+    Serial.println("Caso 11");
+    //si accende segnale acustico
+    tone(BUZZER_PIN, 4000, 8000);
+    //salva su sd
+     //salvo su sd e gestisco file chiudendoli
+    file_log.close();
+    file_flash.close();
+
+    if (move_file_flash_sd(String("/flight_") + n_flight)) {
+      // rimuovo i file
+      remove_file_flash();
+      log_flash("spostati tutti i file su SD");
+    }
+
+    //aumento il contatore dei lanci
+    n_flight++;
+    // salvo il contatore
+    preferences.putUInt("n_flight", n_flight);
+    preferences.end();
+
+    while(1) updateUI();
+    }break;
+    case 12:{}
     
   }
-  */
+
+  
 }

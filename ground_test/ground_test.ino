@@ -1,3 +1,6 @@
+
+
+
 //////////////////////////////////////////////
 //        RemoteXY include library          //
 //////////////////////////////////////////////
@@ -23,19 +26,26 @@
 #define PYRO_4 7
 #define BUZZER_PIN 21
 
+// voltaggio pin voltage batteria
+#define MAX_VOLTAGE 0.7368  // Batteria 100% 4.2V -> 0.7368V
+#define MIN_VOLTAGE 0.6491  // batteria   0% 3.7V -> 0.6491V
+#define VOLTAGE_PIN 1
+
+
 // RemoteXY configurate  
 #pragma pack(push, 1)
-uint8_t RemoteXY_CONF[] =   // 185 bytes
-  { 255,4,0,4,0,178,0,16,31,1,129,0,34,27,18,6,24,80,89,82,
-  79,50,0,70,16,33,33,6,6,1,149,0,10,48,36,37,15,15,4,26,
-  31,79,78,0,31,79,70,70,0,10,48,37,67,15,15,4,26,31,79,78,
-  0,31,79,70,70,0,129,0,35,57,18,6,24,80,89,82,79,52,0,70,
-  16,34,63,6,6,1,149,0,10,48,12,67,15,15,4,26,31,79,78,0,
-  31,79,70,70,0,129,0,10,57,18,6,24,80,89,82,79,51,0,70,16,
-  9,63,6,6,1,149,0,10,48,11,37,15,15,4,26,31,79,78,0,31,
-  79,70,70,0,70,16,8,33,6,6,1,149,0,129,0,9,27,18,6,24,
+uint8_t RemoteXY_CONF[] =   // 202 bytes
+  { 255,4,0,16,0,195,0,16,31,1,129,0,34,36,18,6,24,80,89,82,
+  79,50,0,70,16,33,42,6,6,1,149,0,10,48,36,46,15,15,4,26,
+  31,79,78,0,31,79,70,70,0,10,48,37,76,15,15,4,26,31,79,78,
+  0,31,79,70,70,0,129,0,35,66,18,6,24,80,89,82,79,52,0,70,
+  16,34,72,6,6,1,149,0,10,48,12,76,15,15,4,26,31,79,78,0,
+  31,79,70,70,0,129,0,10,66,18,6,24,80,89,82,79,51,0,70,16,
+  9,72,6,6,1,149,0,10,48,11,46,15,15,4,26,31,79,78,0,31,
+  79,70,70,0,70,16,8,42,6,6,1,149,0,129,0,9,36,18,6,24,
   80,89,82,79,49,0,129,0,5,6,53,8,36,71,82,79,85,78,68,32,
-  84,69,83,84,0 };
+  84,69,83,84,0,66,129,12,19,16,7,2,26,67,4,33,20,20,5,2,
+  31,11 };
   
 // this structure defines all the variables and events of your control interface 
 struct {
@@ -51,16 +61,19 @@ struct {
   uint8_t pyro_4_continuity; // led state 0 .. 1 
   uint8_t pyro_3_continuity; // led state 0 .. 1 
   uint8_t pyro_1_continuity; // led state 0 .. 1 
+  int8_t battery_percentage; // =0..100 level position 
+  char battery_percentage_string[11];  // string UTF8 end zero 
 
     // other variable
   uint8_t connect_flag;  // =1 if wire connected, else =0 
 
 } RemoteXY;
 #pragma pack(pop)
-
 /////////////////////////////////////////////
 //           END RemoteXY include          //
 /////////////////////////////////////////////
+#define ledrosso()  (neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,0)) // Red
+
 
 
 void setup() {
@@ -85,8 +98,19 @@ void setup() {
   delay(5000);
 }
 
+void calc_batt_percentage() {
+  double voltage = 0;
+  for (int i = 0; i < 10; i++) {
+    voltage += analogRead(VOLTAGE_PIN) / 8191. * 0.8;
+  }
+  voltage /= 10;
+  RemoteXY.battery_percentage=(int)((voltage - MIN_VOLTAGE) / ((MAX_VOLTAGE - MIN_VOLTAGE) / 100));
+}
+
 void loop() { 
   RemoteXY_Handler ();
+  calc_batt_percentage();
+  sprintf(RemoteXY.battery_percentage_string,"%d", RemoteXY.battery_percentage);
   pyro_continuity();
   if (!RemoteXY_isConnected()) {
     neopixelWrite(RGB_BUILTIN,0,0,0);
@@ -159,8 +183,9 @@ void test(uint8_t* test_ejection_charge, int pyro_channel) {
   neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,0);
   Serial.println("acceso");
   pinMode(pyro_channel, OUTPUT);
+  ledrosso();
   digitalWrite(pyro_channel, HIGH); // sets the pyro on
-  delay(2000);
+  delay(1000);
   digitalWrite(pyro_channel, LOW); // sets the pyro off
   pinMode(pyro_channel, INPUT);
   tone(BUZZER_PIN, 0);

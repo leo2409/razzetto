@@ -16,6 +16,8 @@
 #include "SPIFFS.h"
 #include <FS.h>
 #include <SPIFFS.h>
+// preference per variabili su flash
+#include <Preferences.h>
 // linear algebra
 #include <BasicLinearAlgebra.h>
 #define degToRad(angleInDegrees) ((angleInDegrees)*M_PI / 180.0)
@@ -61,7 +63,7 @@ using namespace BLA;
 #define SEALEVELPRESSURE_HPA (1013.25)
 // valori specifici della configurazione e del lancio (razzo e motore)
 #define ACCTRASHOLD 20
-#define DURATA_MOTORE 0
+#define DURATA_MOTORE 2100
 #define MAX_DURATA_FLIGHT 6800
 
 
@@ -160,11 +162,8 @@ int bytesWritten_log=0;
 File flash_sd;
 File log_sd;
 
-// preference per variabili su flash
-#include <Preferences.h>
-
-Preferences preferences;
 // numero del lancio
+Preferences preferences;
 unsigned int n_flight;
 
 
@@ -230,13 +229,21 @@ BLA::Matrix<3, 3> A_cal_acc = { 1.0084 ,  0.0111,   -0.0143,
                                 0.0028,   0.0139,   1.0010 };
 BLA::Matrix<3> b_cal_acc = { 0.1498,   0.1510,   0.1626 };
 
-// parametri utili per i sensori e il conteggio dei campioni
-int inizio = 0;
-int n_campioni_acc = 0;
-int n_campioni_gyro = 0;
-int n_campioni_magn = 0;
-int n_campioni_baro = 0;
-char stampa[100];
+typedef struct {
+  long unsigned int time_millis;
+  float attitude_x;
+  float attitude_y;
+  float attitude_z;
+  float h_kalman;
+  float v_kalman;
+  float acc_x;
+  float acc_vert;
+  float h_baro;
+} riga_flash;
+
+long unsigned int last_print_flash = 0;
+
+riga_flash riga_nuova;
 
 void setup() {
 
@@ -250,7 +257,6 @@ void setup() {
 
   // PIN DA SETTARE
   // digitali
-  
   pinMode(DET_SD, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   // analogici
@@ -264,7 +270,7 @@ void setup() {
 
   // I2C SET-UP
   Wire.begin();
-  Wire.setClock(3400000); // ottimo trovato con 10 ore di lavoro
+  Wire.setClock(350000);
 
   // PREFERENCE
   // preference per variabili su flash
@@ -294,19 +300,20 @@ void setup() {
   }
 
   // apertura file flash
-  file_flash = SPIFFS.open(String("/dati_flash_") + n_flight + String(".csv"), "w");
-  bytesWritten_flash += file_flash.println("v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z");
+  file_flash = SPIFFS.open(String("/dati_flash_binario_") + n_flight, "w");
   if (!file_flash) {
     Serial.println("Errore aprendo il file dati_flash in scrittura");
     while (1)
       ;
   }
+  file_flash.setBufferSize(800);
 
   file_log = SPIFFS.open(String("/file_log_") + n_flight + String(".txt"), "w");
   if (!file_log) {
     Serial.println("Errore aprendo il file dati_flash in scrittura");
     while (1);
   }
+  file_flash.setBufferSize(1000);
   bytesWritten_log += file_log.println("Eventi importanti");
   
   // INIZIALIZZO SENSORI
@@ -367,6 +374,49 @@ void list_file_flash() {
   Serial.println();
   file.close();
   root.close();
+}
+
+void traduci_file_dati_volo(File file_flash_binario) {
+  ledgiallo();
+  Serial.println("inizio traduzione dati di volo");
+  File file_flash_tradotto = SPIFFS.open(String("/dati_flash_") + n_flight + String(".csv"), "w");
+  if (!file_flash_tradotto) {
+    Serial.println("Errore aprendo il file tradotto dati_flash in scrittura");
+    while (1)
+      ;
+  }
+
+  file_flash_tradotto.println("time_millis, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, h_kalman, v_kalman, acc_x, acc_vert, h_baro");
+  Serial.print("riapro il file binario: ");
+  String nome_file = String("/") + file_flash.name();
+  Serial.println(nome_file);
+  file_flash_binario.close();
+  file_flash_binario = SPIFFS.open(nome_file);
+  if (!file_flash_tradotto) {
+    Serial.println("Errore aprendo il file dati_flash_binario in lettura");
+    while (1)
+      ;
+  }
+  while (file_flash_binario.available()) {
+    // leggo una riga
+    file_flash_binario.read((uint8_t*) &riga_nuova, sizeof(riga_flash));
+    // impagino la riga
+    sprintf(linea, "%lu,%f,%f,%f,%f,%f,%f,%f,%f\n",
+        riga_nuova.time_millis,
+        riga_nuova.attitude_x,
+        riga_nuova.attitude_y,
+        riga_nuova.attitude_z,
+        riga_nuova.h_kalman,
+        riga_nuova.v_kalman,
+        riga_nuova.acc_x,
+        riga_nuova.acc_vert,
+        riga_nuova.h_baro);
+    file_flash_tradotto.print(linea);
+  }
+  file_flash_tradotto.close();
+  file_flash_binario.close();
+  ledoffblack();
+  Serial.println("fine traduzione dati di volo");
 }
 
 bool move_file_flash_sd(String dir) {
@@ -436,11 +486,21 @@ void remove_file_flash() {
 
 
 void print_su_flash() {
-  // tempo, v_kalman, h_kalman, attitude_kalman_x, attitude_kalman_y, attitude_kalman_z, gyro_x, gyro_y, gyro_z, h_baro, acc_x, acc_y, acc_z, mag_x, mag_y, mag_z
-  long unsigned int t = millis();
-  sprintf(linea, "%lu, %f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", t, v_kalman, h_kalman, attitude_kalman(0), attitude_kalman(1), attitude_kalman(2), gyro(0), gyro(1), gyro(2), h_baro, acc(0), acc(1), acc(2), mag(0), mag(1), mag(2));
-  //Serial.println(linea);
-  bytesWritten_flash += file_flash.print(linea);
+  if (millis() - last_print_flash > 9) {
+    riga_nuova.time_millis = millis();
+    riga_nuova.attitude_x = attitude_kalman(0);
+    riga_nuova.attitude_y = attitude_kalman(1);
+    riga_nuova.attitude_z = attitude_kalman(2);
+    riga_nuova.h_kalman = h_kalman;
+    riga_nuova.v_kalman= v_kalman;
+    riga_nuova.acc_x = acc(0);
+    riga_nuova.acc_vert = acc_vert;
+    riga_nuova.h_baro = h_baro;
+
+    file_flash.write((uint8_t*) &riga_nuova, sizeof(riga_flash));
+    // aggiorno il tempo dell'ultima scrittura
+    last_print_flash = millis();
+  }
 }
 
 void log_flash(String log) {
@@ -499,7 +559,7 @@ void stima_stato_razzo() {
     // aggiorno incertezza sulla stima stima
     uncertainty_attitude(0) = (1 - kalman_gain(0)) * uncertainty_attitude(0);
   }
-    
+  
   if (new_baro) {
     // faccio update sulla stima velocità verticale e altezza
     // update incertezza
@@ -679,7 +739,7 @@ void pyro_continuity() {
 
 // controllo che la sd sia inserita
 void sd_check() {
-  RemoteXY.sd_check=digitalRead(DET_SD) == HIGH;
+  RemoteXY.sd_check = digitalRead(DET_SD) == HIGH;
 }
 
 // lettura percentuale batteria
@@ -696,59 +756,6 @@ void calc_batt_percentage() {
 // ============ LOOP ============
 
 void loop() {
-  /*
-  if (inizio == 0) inizio = millis();
-  else if (millis() - inizio > 100000){
-    
-    Serial.print("numero di campioni acc: "); Serial.println(n_campioni_acc);
-    Serial.print("hz acc: "); Serial.println(n_campioni_acc/100);
-    Serial.print("numero di campioni gyro: "); Serial.println(n_campioni_gyro);
-    Serial.print("hz gyro: "); Serial.println(n_campioni_gyro/100);
-    Serial.print("numero di campioni magn: "); Serial.println(n_campioni_magn);
-    Serial.print("hz magn: "); Serial.println(n_campioni_magn/100);
-    Serial.print("numero di campioni baro: "); Serial.println(n_campioni_baro);
-    Serial.print("hz baro: "); Serial.println(n_campioni_baro/100);
-    delay(10000);
-    
-    inizio = millis();
-    n_campioni_acc = 0;
-    n_campioni_gyro = 0;
-    n_campioni_magn = 0;
-    n_campioni_baro = 0;
-    last_sample_bmp = 0;
-  }*/
-  
-  //stima_stato_razzo();
-  //RemoteXY.yaw = attitude_acc(0);
-  //RemoteXY.roll = attitude_acc(1);
-  //RemoteXY.pitch = attitude_acc(2);
-
-
-  /*
-  Serial
-         << "g:2,"
-         << "g_neg:-2,"
-    //     << "acc_x:" << acc(0) << ","
-    //     << "acc_y:" << acc(1) << ","
-    //     << "acc_z:" << acc(2) << '\n';
-    //       << "gyro_x:" << gyro(0) << ","
-    //       << "gyro_y:" << gyro(1) << ","
-    //       << "gyro_z:" << gyro(2) << "\n";
-    //      << "att_x_acc:" << attitude_acc(0) << ","
-    //      << "att_y_acc:" << attitude_acc(1) << ","
-    //      << "att_z_acc:" << attitude_acc(2) << '\n';
-          << "att_x_kalman:" << attitude_kalman(0) << ","
-          << "att_y_kalman:" << attitude_kalman(1) << ","
-          << "att_z_kalman:" << attitude_kalman(2) << ","
-          << "acc_vert:"     << acc_vert            << "," 
-     //    << "altitude_baro:"      << altitude_baro        << ","
-     //       << "h_baro:"             << h_baro               << ","
-           << "h_kalman:"           << h_kalman              << ","
-            << "v_kalman:"           << v_kalman             << "\n"; 
-     
-  //Serial << attitude_kalman << '\n'; */
-  
-  
   //STATI
   Serial.println("Switch");
   Serial.println(stato);
@@ -803,7 +810,7 @@ void loop() {
     sprintf(s," ");
     bool controllo = true;
     //Controllo livello batteria LIPO tramite voltometro
-    /*
+    
     if(RemoteXY.battery_percentage<=30){
       //Errore batteria scarica
       strcat(s, "NO Batt ");
@@ -815,10 +822,10 @@ void loop() {
       //Errore SD non inserita
       strcat(s,"NO SD ");
       controllo = false;
-    }*/
+    }
     //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
     stima_stato_razzo();
-    /*
+    
     if(v_kalman<=-0.6 || v_kalman>=0.2){
       //ERRORE corpo non totalmente fermo
       strcat(s, "NO Ferm ");
@@ -831,16 +838,13 @@ void loop() {
       controllo = false;
     }
     
-    
     //Controllo della continuità sulle micce 
     if(RemoteXY.pyro_1_continuity==0 || RemoteXY.pyro_2_continuity==0 || RemoteXY.pyro_4_continuity==0){
       //ERRORE Non continuità delle micce
       strcat(s, "NO Pyro");
       controllo = false;
-    }*/
-    
-    Serial.println(s);
-    sprintf(RemoteXY.errore, s);
+    }
+
     updateUI();
     if(controllo){ //passa tutti i controlli
       stato=5;
@@ -872,7 +876,6 @@ void loop() {
 
     // accensione motore
     pinMode(PYRO_4, OUTPUT);
-    ledrosso();
     //accensione motore
     t_accensionemotore=millis();//quando acceso motore
     // log provo ad accendere il motore
@@ -889,9 +892,8 @@ void loop() {
     }
     digitalWrite(PYRO_4, LOW);
     tone(BUZZER_PIN, 0);
-    ledoffblack();
 
-    while (!acceso) {
+    while (!acceso && millis() - t_accensionemotore < 4000) {
       stima_stato_razzo();
       print_su_flash();
       if (acc(0)>=ACCTRASHOLD){
@@ -900,7 +902,6 @@ void loop() {
       }
     }
 
-    //accensione corretta FA DEI TEST
     stima_stato_razzo();
     print_su_flash();
     if(acceso){
@@ -918,8 +919,6 @@ void loop() {
     stima_stato_razzo();
     print_su_flash();
     //Controllo angoli Roll e Pitch imponendo dei valori massimi di oscillazione (y e z) con Logg
-    //bytesWritten_log+=log_flash.print(t6+ " ROLL e PITCH:  ");
-    //bytesWritten_log+= log_flash.println(RemoteXY.roll + " , " + RemoteXY.pitch);
     //unione delle misure con un algoritmo di sensor fusion
     //condizione: apogeo però dopo spegnimento motore o tempo in torno a 6.7 secondi{stato=7;}
     if (millis() - t6 > MAX_DURATA_FLIGHT || 
@@ -952,12 +951,12 @@ void loop() {
     digitalWrite(PYRO_1, LOW);
     noTone(BUZZER_PIN);
 
-    //se è passato un tot di tempo prova con altra carica
     if(carica1){
-      log_flash("corretta accensione del paracadute per il nostro test");
-      // stato=9;
+      log_flash("corretta accensione del paracadute");
+      stato = 9;
+    } else {
+      stato = 8;
     }
-    stato = 8;
     }break;
     case 8:{
     stima_stato_razzo();
@@ -979,9 +978,12 @@ void loop() {
     if(carica2){
       log_flash("corretta apertura del paracadute per il nostro test");
       ledazzurro();
+      stato=9;
+      t9 = millis();
+    } else {
+      // identico allo stato 13 dell'sfc
+      stato = 12;
     }
-    stato=9;
-    t9 = millis();
     }break;
     case 9:{
 
@@ -1007,7 +1009,7 @@ void loop() {
     //trasferimento di dati su flash su SD
     //salvo su sd e gestisco file chiudendoli
     file_log.close();
-    file_flash.close();
+    traduci_file_dati_volo(file_flash);
     // sposto i file su sd
     log_flash("sposto tutti i file su SD");
     if (move_file_flash_sd(String("/flight_") + n_flight)) {
@@ -1022,23 +1024,28 @@ void loop() {
     //segnale acustico
     ledverde();
     tone(BUZZER_PIN, 2000, 2000);
-    stato=12;
+    stato=13;
     }break;
     //caso di errore
     case 11:{
-    Serial.println("Caso 11");
     //si accende segnale acustico
     tone(BUZZER_PIN, 4000, 8000);
+    ledrosso();
     //salva su sd
-     //salvo su sd e gestisco file chiudendoli
+    //salvo su sd e gestisco file chiudendoli
     file_log.close();
-    file_flash.close();
+    traduci_file_dati_volo(file_flash);
+    
+    // mando l'errore a remoteXY
+    Serial.println(s);
+    sprintf(RemoteXY.errore, s);
+    updateUI();
 
     if (move_file_flash_sd(String("/flight_") + n_flight)) {
       // rimuovo i file
       remove_file_flash();
-      log_flash("spostati tutti i file su SD");
     }
+    ledrosso();
 
     //aumento il contatore dei lanci
     n_flight++;
@@ -1046,11 +1053,42 @@ void loop() {
     preferences.putUInt("n_flight", n_flight);
     preferences.end();
 
-    while(1) updateUI();
+    while(1) {
+      updateUI();
+      if (!RemoteXY.start) {
+        stato = 3;
+      }
+    }
     }break;
-    case 12:{}
+    case 12:{
+    //si accende segnale acustico
+    tone(BUZZER_PIN, 4000, 8000);
+    ledrosso();
+    //salva su sd
+    //salvo su sd e gestisco file chiudendoli
+    file_log.close();
+    traduci_file_dati_volo(file_flash);
     
-  }
+    // mando l'errore a remoteXY
+    Serial.println(s);
 
-  
+    if (move_file_flash_sd(String("/flight_") + n_flight)) {
+      // rimuovo i file
+      remove_file_flash();
+      log_flash("spostati tutti i file su SD");
+    }
+    ledrosso();
+
+    //aumento il contatore dei lanci
+    n_flight++;
+    // salvo il contatore
+    preferences.putUInt("n_flight", n_flight);
+    preferences.end();
+
+    // fine esecuzione
+    stato = 13;
+    }break;
+    // fine esecuzione
+    case 13:{}
+  }
 }

@@ -1,17 +1,10 @@
-
-
-
 //////////////////////////////////////////////
 //        RemoteXY include library          //
 //////////////////////////////////////////////
 
-// you can enable debug logging to Serial at 115200
-//#define REMOTEXY__DEBUGLOG  
-
 // RemoteXY select connection mode and include library 
 #define REMOTEXY_MODE__ESP32CORE_WIFI_POINT
 #include <WiFi.h>
-
 #include <RemoteXY.h>
 
 // RemoteXY connection settings 

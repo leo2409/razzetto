@@ -6,16 +6,14 @@
 //#define REMOTEXY__DEBUGLOG  
 
 // RemoteXY select connection mode and include library 
-#define REMOTEXY_MODE__SOFTSERIAL
-#include <SoftwareSerial.h>
-
+#define REMOTEXY_MODE__ESP32CORE_WIFI_POINT
+#include <WiFi.h>
 #include <RemoteXY.h>
 
 // RemoteXY connection settings 
-#define REMOTEXY_SERIAL_RX 2
-#define REMOTEXY_SERIAL_TX 3
-#define REMOTEXY_SERIAL_SPEED 9600
-
+#define REMOTEXY_WIFI_SSID "RemoteXY"
+#define REMOTEXY_WIFI_PASSWORD "nimbus2024"
+#define REMOTEXY_SERVER_PORT 6377
 
 // RemoteXY configurate  
 #pragma pack(push, 1)

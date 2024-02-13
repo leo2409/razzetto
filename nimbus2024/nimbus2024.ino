@@ -62,8 +62,9 @@ using namespace BLA;
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 // valori specifici della configurazione e del lancio (razzo e motore)
-#define ACCTRASHOLD 20
-#define DURATA_MOTORE 2100
+#define ACCTRASHOLD 15
+#define ACC_SEPARAZIONE_CONO 20
+#define DURATA_MOTORE 0
 #define MAX_DURATA_FLIGHT 6800
 
 
@@ -596,7 +597,6 @@ void readBaro() {
     }else{
       altitude_baro = bmp.readAltitude(sealevelpressure);
     }
-    n_campioni_baro++;
     new_baro = true;
     last_sample_bmp = millis();
   }
@@ -652,14 +652,12 @@ void readIMU() {
       }
       last_sample_acc = mill;
       
-      n_campioni_acc++;
       new_acc = true;
       break;
     case SH2_MAGNETIC_FIELD_CALIBRATED:
       mag(0) = sensorValueIMU.un.magneticField.x;
       mag(1) = sensorValueIMU.un.magneticField.y;
       mag(2) = sensorValueIMU.un.magneticField.z;
-      n_campioni_magn++;
       new_mag = true;
       break;
     case SH2_GYROSCOPE_CALIBRATED:  // rad/s
@@ -673,7 +671,6 @@ void readIMU() {
       }
       last_sample_gyro = mill;
       
-      n_campioni_gyro++;
       new_gyro = true;
       break;
   }
@@ -810,13 +807,13 @@ void loop() {
     sprintf(s," ");
     bool controllo = true;
     //Controllo livello batteria LIPO tramite voltometro
-    
+    /*
     if(RemoteXY.battery_percentage<=30){
       //Errore batteria scarica
       strcat(s, "NO Batt ");
       controllo = false;
     }
-    
+    */
     //Controllo SD
     if(!RemoteXY.sd_check){
       //Errore SD non inserita
@@ -825,12 +822,13 @@ void loop() {
     }
     //Corpo totalmente fermo: Accelerazione gravitazionale su un solo asse
     stima_stato_razzo();
-    
+    /*
     if(v_kalman<=-0.6 || v_kalman>=0.2){
       //ERRORE corpo non totalmente fermo
       strcat(s, "NO Ferm ");
       controllo = false;
     }
+    */
     //Controllo angoli Yaw e Pitch con valore minore di una soglia
     if(RemoteXY.yaw>=30 || RemoteXY.yaw<=-30 || RemoteXY.pitch<=-30 || RemoteXY.pitch>=30){
       //ERRORE Roll e/o Pitch non sono a zero
@@ -940,12 +938,13 @@ void loop() {
     log_flash("accensione prima miccia");
     pinMode(PYRO_1, OUTPUT);
     digitalWrite(PYRO_1, HIGH);
-    while (millis() - t7 < 1000) {
+    while (carica1 || millis() - t7 < 800) {
       // aggiorno stato razzo
       stima_stato_razzo();
       print_su_flash();
-      if(acc_vert<=10.1 && acc_vert>=9.5){
+      if(acc(0) > ACC_SEPARAZIONE_CONO){
         carica1=true;
+        ledviola();
       }
     }
     digitalWrite(PYRO_1, LOW);
@@ -969,7 +968,7 @@ void loop() {
     pinMode(PYRO_2, OUTPUT);
     digitalWrite(PYRO_2, HIGH);
     while (millis()-t8< 1000) {
-      if(acc_vert<=10.1 && acc_vert>=9.5){
+      if(acc(0) > ACC_SEPARAZIONE_CONO){
         carica2=true;
       }
     }

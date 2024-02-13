@@ -62,7 +62,7 @@ using namespace BLA;
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 // valori specifici della configurazione e del lancio (razzo e motore)
-#define ACCTRASHOLD 15
+#define ACCTRESHOLD 15
 #define ACC_SEPARAZIONE_CONO 20
 #define DURATA_MOTORE 0
 #define MAX_DURATA_FLIGHT 6800
@@ -883,7 +883,7 @@ void loop() {
     while (!acceso && millis() - t_accensionemotore < 2000) {
       stima_stato_razzo();
       print_su_flash();
-      if (acc(0) >= ACCTRASHOLD){
+      if (acc(0) >= ACCTRESHOLD){
         acceso=true;
         t6 = millis();
       }
@@ -894,7 +894,7 @@ void loop() {
     while (!acceso && millis() - t_accensionemotore < 4000) {
       stima_stato_razzo();
       print_su_flash();
-      if (acc(0)>=ACCTRASHOLD){
+      if (acc(0)>=ACCTRESHOLD){
         acceso=true;
         t6 = millis();
       }
